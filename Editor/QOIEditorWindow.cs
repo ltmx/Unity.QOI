@@ -18,7 +18,7 @@ public class QOIEditorWindow : EditorWindow
     {
         GUILayout.BeginVertical();
         tex = TextureField("Texture", tex);
-        
+        GUILayout.Space(20);
         if (GUILayout.Button("Export To QOI") && tex != null) 
             tex.SaveToFile();
         GUILayout.EndVertical();
