@@ -5,9 +5,14 @@ using static ImageProcessing;
 
 public static class QOIExporter
 {
+    private static readonly string outputFolder = "QOI_Output";
+    /// <summary>
+    /// Saves the texture to a file in the project's RenderOutput folder
+    /// </summary>
+    /// <param name="t"></param>
     public static void SaveToFile(this Texture2D t)
     {
-        var dirPath = Application.dataPath + "/RenderOutput";
+        var dirPath = Application.dataPath + "/" + outputFolder;
         dirPath.CreateDirectoryIfVoid();
 
         var fileName = "/QOI_" + t.name + QOI;
@@ -19,7 +24,7 @@ public static class QOIExporter
         #endif
         
         // Focuses the file in the project window and highlights it
-        Selection.activeObject = LoadAtPath<Texture2D>("Assets/RenderOutput" + fileName);
+        Selection.activeObject = LoadAtPath<Texture2D>("Assets/" + outputFolder + fileName);
         EditorGUIUtility.PingObject( Selection.activeObject );
         
         // Refresh the project window
@@ -29,6 +34,8 @@ public static class QOIExporter
         #endif
     }
 
+    // Context menu actions -----------------------------------------------------
+    
     [MenuItem("Assets/Export To QOI")]
     private static void ExportToQOI() {
         var texture = Selection.activeObject as Texture2D;

@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEditor;
-using static QOIExporter;
 
 public class QOIEditorWindow : EditorWindow
 {
