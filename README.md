@@ -1,5 +1,7 @@
+<img src="https://github.com/LTMX/Unity.QOI/blob/main/.documentation/Unity.QOI%20Logo.png" >
+
 # Unity.QOI
-QOI Importer &amp; Exporter for Unity
+QOI Importer & Exporter for Unity
 
 ### Credits : 
 - QOI Image Format : https://github.com/phoboslab/qoi
