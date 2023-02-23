@@ -9,7 +9,6 @@
 
 ### Credits
 - <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
-- <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
 - <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
 - <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
 
