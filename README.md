@@ -61,3 +61,5 @@
 4. Paste URL from step 1 into the URL box and click ``Add``
 5. Unity.QOI will now automatically update from GitHub
 
+## LICENSING
+<p>This project is licensed under the MIT License (<a href="https://github.com/LTMX/Unity.Mathematics-Extensions/blob/master/LICENSE">License</a>)</p>
