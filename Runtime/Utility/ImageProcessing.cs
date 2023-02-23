@@ -112,6 +112,12 @@ public static class ImageProcessing
         var qoiImage = new QoiImage(data, t.width, t.height, channels); // Should be Integrated into a constructor
         return QoiEncoder.Encode(qoiImage);
     }
+    
+    public static byte[] EncodeToEXR(this Texture2D t)
+    {
+        var copy = t.CopySafe();
+        return copy.GetByteArray32();
+    }
 
     /// Short for File.WriteAllBytes
     /// <returns>Returns the length of written file in bytes</returns>
@@ -121,13 +127,17 @@ public static class ImageProcessing
         return path.Length;
     }
     
-    public const string QOI = ".qoi";
-    public const string PNG = ".png";
-    public const string JPG = ".jpg";
-    public const string EXR = ".exr";
-    public const string TGA = ".tga";
-    public const string ShaderGraph = ".shadergraph";
-    public const string ShaderSubGraph =".shadersubgraph";
-    public const string VFXGraph =".visualeffect";
-    public const string ASSET =".asset";
+
+    public static class FileExtensions
+    {
+        public const string QOI = ".qoi";
+        public const string PNG = ".png";
+        public const string JPG = ".jpg";
+        public const string EXR = ".exr";
+        public const string TGA = ".tga";
+        public const string ShaderGraph = ".shadergraph";
+        public const string ShaderSubGraph =".shadersubgraph";
+        public const string VFXGraph =".visualeffect";
+        public const string ASSET =".asset";
+    }
 }

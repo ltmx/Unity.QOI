@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEditor;
+using static ImageSaveUtility.TextureEncodingFormat;
 
 public class QOIEditorWindow : EditorWindow
 {
@@ -20,7 +21,7 @@ public class QOIEditorWindow : EditorWindow
         tex = TextureField("Texture", tex);
         GUILayout.Space(20);
         if (GUILayout.Button("Export To QOI") && tex != null) 
-            tex.SaveToFile();
+            tex.SaveToFile(QOI);
         GUILayout.EndVertical();
     }
     
