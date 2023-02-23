@@ -35,9 +35,9 @@
     </tr>
   </table>
 
-<h3>Editor Window</h3>
+### Editor Window
 <div display="inline">
-  <img height="248" src=".documentation/Qoi%20Editor%20Window.png">
   <img height="248" src=".documentation/Find%20Qoi%20Editor%20Window.png">
+  <img height="248" src=".documentation/Qoi%20Editor%20Window.png">
 </div>
 
