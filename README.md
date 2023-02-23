@@ -48,9 +48,9 @@
   <img height="248" src=".documentation/Qoi%20Editor%20Window.png">
 </div>
 
-### installation 
-- (Recommended) in Unity's Package Manager, add `https://github.com/LTMX/Unity.QOI.git` as a Git URL package [full instructions](https://github.com/radiatoryang/hedera/wiki#unity-package-manager-recommended)
-- or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
+### Installation 
+- (Recommended) In Unity's Package Manager, add `https://github.com/LTMX/Unity.QOI.git` as a Git URL package [full instructions](https://github.com/radiatoryang/hedera/wiki#unity-package-manager-recommended)
+- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
     and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
     
 # Installation
@@ -65,5 +65,5 @@
 - please post bug reports or (small) feature requests as an [Issue](https://github.com/radiatoryang/hedera/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
 
-## LICENSING
+## LICENSE
 <p>This project is licensed under the MIT License (<a href="https://github.com/LTMX/Unity.Mathematics-Extensions/blob/master/LICENSE">License</a>)</p>
