@@ -61,5 +61,9 @@
 4. Paste URL from step 1 into the URL box and click ``Add``
 5. Unity.QOI will now automatically update from GitHub
 
+### Contribute
+- please post bug reports or (small) feature requests as an [Issue](https://github.com/radiatoryang/hedera/issues)
+- [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
+
 ## LICENSING
 <p>This project is licensed under the MIT License (<a href="https://github.com/LTMX/Unity.Mathematics-Extensions/blob/master/LICENSE">License</a>)</p>
