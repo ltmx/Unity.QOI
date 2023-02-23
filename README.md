@@ -8,13 +8,17 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
 ![GitHub](https://img.shields.io/github/license/LTMX/Unity.QOI)
 
-
-
 <br>
 <img align="left" src="https://raw.githubusercontent.com/LTMX/Banners-And-Buttons/main/Support%20Me%20Kofi%20Banner%20Shader%20Graph%20Mastery.png" width="140px"/>
 <br>
 
 ## Features
+
+- Supports RGB & RGBA Formats
+```csharp
+anyTexture2D.EncodeToQOI() // Returns a byte array of the encoded Texture2D
+
+```
 
 <table>
     <tr>
