@@ -11,12 +11,8 @@ public static class ImageSaveUtility
     }
     
     private static readonly string outputFolder = "QOI_Output";
-
-    /// <summary>
+    
     /// Saves the texture to a file in the project's RenderOutput folder
-    /// </summary>
-    /// <param name="t"></param>
-    /// <param name="format"></param>
     public static void SaveToQOIFile(this Texture2D t, TextureEncodingFormat format)
     {
         var dirPath = Application.dataPath + "/" + outputFolder;
@@ -53,6 +49,7 @@ public static class ImageSaveUtility
             TextureEncodingFormat.JPG => t.EncodeToJPG(),
             TextureEncodingFormat.EXR => t.EncodeToEXR(),
             TextureEncodingFormat.TGA => t.EncodeToTGA(),
+            // TODO: Should implement the rest of the formats which currently dont have any encoders/decoders
             // BMP => t.EncodeToBMP(),
             // HDR => t.EncodeToHDR(),
             // TIFF => t.EncodeToTIFF(),
