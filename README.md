@@ -14,11 +14,6 @@
 <img align="left" src="https://raw.githubusercontent.com/LTMX/Banners-And-Buttons/main/Support%20Me%20Kofi%20Banner%20Shader%20Graph%20Mastery.png" width="140px"/>
 <br>
 
-### Credits
-- <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
-- <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
-- <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
-
 ## Features
 
 <table>
@@ -64,6 +59,11 @@
 ### Contribute
 - please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
+
+### Credits
+- <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
+- <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
+- <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
 
 ## LICENSE
 <p>This project is licensed under the MIT License (<a href="LICENSE">License</a>)</p>
