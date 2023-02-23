@@ -1,9 +1,8 @@
 <p><br><br>
     <img align="left" width="380px" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Unity.QOI%20Logo.png" alt="Unity.QOI">
 </p>
-<p>  
-    <h2>QOI Importer & Exporter for Unity</h2>
-</p>
+ 
+## QOI Importer & Exporter for Unity
 ![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI)
 ![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?color=blueviolet)
 ![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
