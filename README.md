@@ -14,15 +14,30 @@
 
 ## Features
 
+<table>
+    <tr>
+      <td>
+        <a href="selftitled.html">
+          <div class="imgWrap floatleft">
+            <h3>Right Click Action</h3>
+            <img src=".documentation/QOI%20Context%20Menu.png" height="128">
+          </div>
+        </a>
+      </td>
+      <td>
+        <a href="12x5.html">
+          <div class="imgWrap floatleft">
+            <h3>Output Folder</h3>
+            <img src=".documentation/Qoi%20Output%20Folder.png" height="128">
+          </div>
+        </a>
+      </td>
+    </tr>
+  </table>
 
-### Right Click Action
-<img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/QOI%20Context%20Menu.png">
-
-### Output Folder : QOI_Output
-<img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Output%20Folder.png">
-
-### Editor Window
+<h3>Editor Window</h3>
 <div display="inline">
-<img height="248" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Editor%20Window.png">
-<img height="248" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Find%20Qoi%20Editor%20Window.png">
+  <img height="248" src=".documentation/Qoi%20Editor%20Window.png">
+  <img height="248" src=".documentation/Find%20Qoi%20Editor%20Window.png">
 </div>
+
