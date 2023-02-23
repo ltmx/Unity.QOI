@@ -62,8 +62,8 @@
 5. Unity.QOI will now automatically update from GitHub
 
 ### Contribute
-- please post bug reports or (small) feature requests as an [Issue](https://github.com/radiatoryang/hedera/issues)
+- please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
 
 ## LICENSE
-<p>This project is licensed under the MIT License (<a href="https://github.com/LTMX/Unity.Mathematics-Extensions/blob/master/LICENSE">License</a>)</p>
+<p>This project is licensed under the MIT License (<a href="LICENSE">License</a>)</p>
