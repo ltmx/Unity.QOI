@@ -22,6 +22,7 @@
 <img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Output%20Folder.png">
 
 ### Editor Window
-<img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Editor%20Window.png">
-<img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Find%20Qoi%20Editor%20Window.png">
-
+<div display="inline">
+<img height="248" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Editor%20Window.png">
+<img height="248" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Find%20Qoi%20Editor%20Window.png">
+</div>
