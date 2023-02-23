@@ -62,7 +62,7 @@
 5. Unity.QOI will now automatically update from GitHub
 
 ### Contribute
-- please post bug reports or (small) feature requests as an [Issue](issues)
+- please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
 
 ## LICENSE
