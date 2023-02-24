@@ -17,7 +17,7 @@
 - Supports RGB & RGBA Formats
 ```csharp
 anyTexture2D.EncodeToQOI() // Returns a byte array of the encoded Texture2D
-
+anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to save your file
 ```
 
 <table>
