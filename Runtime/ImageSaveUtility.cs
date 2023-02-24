@@ -1,5 +1,8 @@
-﻿using UnityEditor;
+﻿using System;
+using System.IO;
+using UnityEditor;
 using UnityEngine;
+using static ImageSaveUtility.TextureEncodingFormat;
 
 public static class ImageSaveUtility
 {
@@ -44,13 +47,13 @@ public static class ImageSaveUtility
     {
         return format switch
         {
-            TextureEncodingFormat.QOI => t.EncodeToQOI(),
-            TextureEncodingFormat.PNG => t.EncodeToPNG(),
-            TextureEncodingFormat.JPG => t.EncodeToJPG(),
-            TextureEncodingFormat.EXR => t.EncodeToEXR(),
-            TextureEncodingFormat.TGA => t.EncodeToTGA(),
+            QOI => t.EncodeToQOI(),
+            PNG => t.EncodeToPNG(),
+            JPG => t.EncodeToJPG(),
+            EXR => t.EncodeToEXR(),
+            TGA => t.EncodeToTGA(),
             // TODO: Should implement the rest of the formats which currently dont have any encoders/decoders
-            // BMP => t.EncodeToBMP(),
+            BMP => t.EncodeToBMP(),
             // HDR => t.EncodeToHDR(),
             // TIFF => t.EncodeToTIFF(),
             // GIF => t.EncodeToGIF(),
@@ -59,8 +62,21 @@ public static class ImageSaveUtility
         };
     }
 
+    public static byte[] EncodeToBMP(this Texture2D t)
+    {
+
+        return Array.Empty<byte>();
+    }
+    
+    // public static byte[] EncodeBitmap(Bitmap bitmap)
+    // {
+    //     using MemoryStream stream = new MemoryStream();
+    //     bitmap.Save(stream, ImageFormat.Bmp);
+    //     return stream.ToArray();
+    // }
+
     public enum TextureEncodingFormat
     {
-        QOI, PNG, JPG, EXR, TGA //BMP, HDR, TIFF, GIF, HEIF
+        QOI, PNG, JPG, EXR, TGA, BMP, HDR, TIFF, GIF, HEIF
     }
 }
