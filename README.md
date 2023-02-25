@@ -41,30 +41,37 @@ anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to s
     </tr>
   </table>
 
-### Editor Window
-<div display="inline">
-  <img height="248" src=".documentation/Find%20Qoi%20Editor%20Window.png">
-  <img height="248" src=".documentation/Qoi%20Editor%20Window.png">
-</div>
 
-### Installation 
-- (Recommended) In Unity's Package Manager, add `https://github.com/LTMX/Unity.QOI.git` as a Git URL package [full instructions](https://github.com/radiatoryang/hedera/wiki#unity-package-manager-recommended)
-- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
-    and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
+### Importer Inspector Parameters
+Most settings have been mapped from how unity imports other image formats, to ensure behaviour compatibility
+
+<img width="300" src=".documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
+
+
+<!--
+### Editor Window
+
+<img height="170" src=".documentation/Qoi%20Editor%20Window.png">
+<img height="170" src=".documentation/Find%20Qoi%20Editor%20Window.png">
+-->
     
-# Installation
-## UNITY PACKAGE MANAGER (recommended)
+## Installation
+### UNITY PACKAGE MANAGER (recommended)
 1. Copy this URL: ``https://github.com/radiatoryang/hedera.git``
 2. In Unity menu bar, go to ``Window > Package Manager`` [Info / Help for Unity Package Manager](https://docs.unity3d.com/Manual/Packages.html)
 3. In Unity Package Manager, click ``(+ button) > Add package from Git URL...`` (info / troubleshooting Git URL packages in Unity)
 4. Paste URL from step 1 into the URL box and click ``Add``
 5. Unity.QOI will now automatically update from GitHub
+### Zip Package From Releases
+- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
+    and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
 
-### Contribute
+
+## Contribute
 - please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
 
-### Credits
+## Credits
 - <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
 - <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
 - <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
