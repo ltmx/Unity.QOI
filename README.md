@@ -54,11 +54,6 @@ Most settings have been mapped from how unity imports other image formats, to en
 <img height="170" src=".documentation/Qoi%20Editor%20Window.png">
 <img height="170" src=".documentation/Find%20Qoi%20Editor%20Window.png">
 -->
-
-### Installation 
-- (Recommended) In Unity's Package Manager, add `https://github.com/LTMX/Unity.QOI.git` as a Git URL package [full instructions](https://github.com/radiatoryang/hedera/wiki#unity-package-manager-recommended)
-- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
-    and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
     
 # Installation
 ## UNITY PACKAGE MANAGER (recommended)
@@ -67,6 +62,9 @@ Most settings have been mapped from how unity imports other image formats, to en
 3. In Unity Package Manager, click ``(+ button) > Add package from Git URL...`` (info / troubleshooting Git URL packages in Unity)
 4. Paste URL from step 1 into the URL box and click ``Add``
 5. Unity.QOI will now automatically update from GitHub
+## Zip Package From Releases
+- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
+    and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
 
 ### Contribute
 - please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
