@@ -58,7 +58,7 @@ Most settings have been mapped from how unity imports other image formats, to en
 ## Installation
 ### UNITY PACKAGE MANAGER (recommended)
 1. Copy this URL: ``https://github.com/LTMX/Unity.QOI.git``
-2. In Unity menu bar, go to ``Window > Package Manager`` [Info / Help for Unity Package Manager](https://docs.unity3d.com/Manual/Packages.html)
+2. In Unity menu bar, go to ``Window > Package Manager`` [Help](https://docs.unity3d.com/Manual/Packages.html)
 3. In Unity Package Manager, click ``(+ button) > Add package from Git URL...`` (info / troubleshooting Git URL packages in Unity)
 4. Paste URL from step 1 into the URL box and click ``Add``
 5. Unity.QOI will now automatically update from GitHub
@@ -73,8 +73,8 @@ Most settings have been mapped from how unity imports other image formats, to en
 
 ## Credits
 - <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
-- <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
-- <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
+- <a href="https://github.com/alanmcgovern/QoiSharp">QOISharp Encoder</a>
+- <a href="https://github.com/Ben1138/unity-qoi">Importer from Ben1138, though modified a lot</a>
 
 ## LICENSE
 <p>This project is licensed under the MIT License (<a href="LICENSE">License</a>)</p>
