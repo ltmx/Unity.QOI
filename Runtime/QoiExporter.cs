@@ -30,6 +30,4 @@ public static class QOIExporter
     }
     [MenuItem("Assets/Export to.../JPG", true)]
     private static bool ExportToJPGValidation() => Selection.activeObject is Texture2D;
-    
-    
 }

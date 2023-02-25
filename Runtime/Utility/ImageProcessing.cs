@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
-using System.Threading;
 using Unity.Mathematics;
-using UnityEditor;
 using UnityEngine;
-using Object = UnityEngine.Object;
 
 public static class ImageProcessing
 {
@@ -140,4 +138,54 @@ public static class ImageProcessing
         public const string VFXGraph =".visualeffect";
         public const string ASSET =".asset";
     }
+    
+    /// <summary>
+    /// Copy a given <see cref="RenderTexture"/> to a <see cref="Texture2D"/>.
+    /// This method assumes that both textures exist and are the same size.
+    /// </summary>
+    /// <param name="renderTexture">The source <see cref="RenderTexture" />.</param>
+    /// <param name="texture">The destination <see cref="Texture2D" />.</param>
+    public static void ToTexture2D(this RenderTexture renderTexture, Texture2D texture)
+    {
+        RenderTexture.active = renderTexture;
+        texture.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+        texture.Apply();
+    }
+    
+    public static Texture2D ToTexture2D(this RenderTexture renderTexture)
+    {
+        var tex = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.ARGB32, true);
+        renderTexture.ToTexture2D(tex);
+        return tex;
+    }
+    
+    // public static void ToRenderTexture(this Texture2D texture, RenderTexture renderTexture) => Graphics.CopyTexture(texture, renderTexture);
+
+    // public static RenderTexture ToRenderTexture(this Texture2D texture)
+    // {
+    //     var rt = new RenderTexture(texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
+    //     rt.useMipMap = true;
+    //     rt.autoGenerateMips = true;
+    //     rt.Create();
+    //     Graphics.CopyTexture(texture, rt);
+    //     rt.GenerateMips();
+    //     // rt.Release();
+    //     return rt;
+    // }
+    [Serializable]
+    public enum MaxTextureSize
+    {
+        x16 = 16,
+        x32 = 32,
+        x64 = 64,
+        x128 = 128,
+        x256 = 256,
+        x512 = 512,
+        x1024 = 1024,
+        x2048 = 2048,
+        x4096 = 4096,
+        x8192 = 8192,
+        x16384 = 16384
+    }
+
 }

@@ -20,7 +20,7 @@ public static class QoiDecoder
             throw new QoiDecodingException("File too short");
         }
         
-        if (!QoiCodec.IsValidMagic(data.Slice(0, 4)))
+        if (!QoiCodec.IsValidMagic(data.Slice (0, 4)))
         {
             throw new QoiDecodingException("Invalid file magic"); // TODO: add magic value
         }
@@ -128,8 +128,14 @@ public static class QoiDecoder
             }
         }
         
-        if (!QoiCodec.Padding.Span.SequenceEqual(data.Slice(data.Length - QoiCodec.Padding.Length)))
-            throw new InvalidOperationException("Invalid padding");
+        int pixelsEnd = data.Length - QoiCodec.Padding.Length;
+        for (int padIdx = 0; padIdx < QoiCodec.Padding.Length; padIdx++) 
+        {
+            if (data[pixelsEnd + padIdx] != QoiCodec.Padding[padIdx]) 
+            {
+                throw new InvalidOperationException("Invalid padding");
+            }
+        }
 
         return QoiImage.FromMemory(pixels, width, height, (Channels)channels, colorSpace);
     }
