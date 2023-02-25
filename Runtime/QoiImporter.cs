@@ -6,9 +6,10 @@ using UnityEditor.AssetImporters;
 using static ImageProcessing;
 using static UnityEditor.EditorUtility;
 using static UnityEngine.TextureFormat;
-// using static MipGenerator; // Todo: Remove this
 
-
+/// <summary>
+/// Qoi Importer
+/// </summary>
 [ScriptedImporter(1, "qoi")]
 public class QoiImporter : ScriptedImporter
 {
@@ -16,28 +17,26 @@ public class QoiImporter : ScriptedImporter
     public TextureImporterType textureType = TextureImporterType.Default;
 
     // Todo: Implement grayscaleToAlpha
-    public bool grayscaleToAlpha;
+    // public bool grayscaleToAlpha;
     public bool alphaIsTransparency;
     public bool mipMapEnabled = true;
     //Todo: Implement npotScale clamping
     public TextureImporterNPOTScale npotScale = TextureImporterNPOTScale.None;
     public bool sRGBTexture = true;
-    public bool linearTexture = false;
+    // public bool linearTexture = false;
     
     
     public TextureWrapMode wrapMode = TextureWrapMode.Repeat;
     public FilterMode filterMode = FilterMode.Trilinear;
-    public int anisoLevel = 2048;
+    [Range(0,16)]
+    public int anisoLevel = 1;
     
     // Size and compression
     public MaxTextureSize maxTextureSize = MaxTextureSize.x2048;
     public TextureCompressionQuality compressionQuality;
-    // public TextureCompressionQuality crunchedCompressionQuality = TextureCompressionQuality.Best;
     public bool crunchedCompression = false;
     
-    // ¨rivate Fields
-    // private TextureImporterShape textureShape = TextureImporterShape.Texture2D;
-    // private TextureDimension dimension = TextureDimension.Tex2D;
+    // Private Fields
     private TextureFormat textureFormat = DXT5;
 
     public override void OnImportAsset(AssetImportContext ctx)
@@ -85,44 +84,4 @@ public class QoiImporter : ScriptedImporter
         ctx.AddObjectToAsset(tex.name, tex, tex);
         ctx.SetMainObject(tex);
     }
-
-    // private static string GetName(string path)
-    // {
-    //     int slashIdx = path.LastIndexOf('/');
-    //     if (slashIdx < 0) slashIdx = 0;
-    //     int dotIdx = path.LastIndexOf('.');
-    //     // Debug.Assert(dotIdx >= 0);
-    //     return path.Substring(slashIdx, dotIdx - slashIdx);
-    // }
 }
-
-// public class QOIImageImporter : ScriptedImporter
-// {
-//     public int mipmapLevels = 3;
-//     public TextureWrapMode wrapMode = TextureWrapMode.Repeat;
-//     public FilterMode filterMode = FilterMode.Bilinear;
-//     public int anisoLevel = 1;
-//     public TextureImporterType textureType;
-//     public bool mipmapEnabled;
-//     public TextureCompressionQuality CompressionQuality = TextureCompressionQuality.Best;
-//     private TextureFormat textureFormat = DXT1Crunched;
-//     
-//     public override void OnImportAsset(AssetImportContext ctx)
-//     {
-//         // Load the texture data from the file
-//         byte[] data = File.ReadAllBytes(ctx.assetPath);
-//         Texture2D texture = new Texture2D(2, 2);
-//         texture.LoadImage(data);
-//
-//         // Set the texture import settings
-//         this.textureType = TextureImporterType.Default;
-//         this.mipmapEnabled = true;
-//         this.wrapMode = wrapMode;
-//         this.filterMode = filterMode;
-//         this.anisoLevel = anisoLevel;
-//
-//         // Apply the texture to the asset
-//         ctx.AddObjectToAsset("QOI Image", texture);
-//         ctx.SetMainObject(texture);
-//     }
-// }

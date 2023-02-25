@@ -175,17 +175,17 @@ public static class ImageProcessing
     [Serializable]
     public enum MaxTextureSize
     {
-        x16 = 16,
-        x32 = 32,
-        x64 = 64,
-        x128 = 128,
-        x256 = 256,
-        x512 = 512,
-        x1024 = 1024,
-        x2048 = 2048,
-        x4096 = 4096,
-        x8192 = 8192,
-        x16384 = 16384
+        [Description("16")] x16 = 16,
+        [Description("32")] x32 = 32,
+        [Description("64")] x64 = 64,
+        [Description("128")] x128 = 128,
+        [Description("256")] x256 = 256,
+        [Description("512")] x512 = 512,
+        [Description("1024")] x1024 = 1024,
+        [Description("2048")] x2048 = 2048,
+        [Description("4096")] x4096 = 4096,
+        [Description("8192")] x8192 = 8192,
+        [Description("16384")] x16384 = 16384
     }
 
 }
