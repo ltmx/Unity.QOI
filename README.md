@@ -66,11 +66,12 @@ Most settings have been mapped from how unity imports other image formats, to en
 - Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
     and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
 
-### Contribute
+
+## Contribute
 - please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
 - [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
 
-### Credits
+## Credits
 - <a href="https://github.com/phoboslab/qoi">QOI Image Format</a>
 - <a href="https://github.com/alanmcgovern/QoiSharp/tree/perf-optimisations">QOISharp Encoder</a>
 - <a href="https://github.com/Ben1138/unity-qoi">Asset Importer from Ben1138</a>
