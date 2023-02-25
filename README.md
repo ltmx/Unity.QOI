@@ -41,15 +41,19 @@ anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to s
     </tr>
   </table>
 
-<img align="left" width="250" src=".documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
 
 ### Importer Inspector Parameters
-Most settings have been copied from how unity imports other formats, to ensure behaviour compatibility
+Most settings have been mapped from how unity imports other image formats, to ensure behaviour compatibility
 
+<img width="300" src=".documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
+
+
+<!--
 ### Editor Window
 
 <img height="170" src=".documentation/Qoi%20Editor%20Window.png">
 <img height="170" src=".documentation/Find%20Qoi%20Editor%20Window.png">
+-->
 
 ### Installation 
 - (Recommended) In Unity's Package Manager, add `https://github.com/LTMX/Unity.QOI.git` as a Git URL package [full instructions](https://github.com/radiatoryang/hedera/wiki#unity-package-manager-recommended)
