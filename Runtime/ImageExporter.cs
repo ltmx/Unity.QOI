@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using static ImageSaveUtility.TextureEncodingFormat;
 
-public static class QOIExporter
+public static class ImageExporter
 {
     // Context menu actions -----------------------------------------------------
     [MenuItem("Assets/Export to.../QOI", false, 5)]
