@@ -1,5 +1,11 @@
-﻿using UnityEditor;
+﻿using System;
+using System.Runtime.InteropServices;
+using Mono.Cecil;
+using UnityEditor;
 using UnityEngine;
+using Unity.Mathematics;
+using static Unity.Mathematics.math;
+using Unity.Burst;
 
 public static class TextureImporterExtensions
 {
@@ -55,4 +61,5 @@ public static class TextureImporterExtensions
 
     public static void SetImporterType(this Texture2D texture, TextureImporterType type) => texture?.GetImporter()?.SetType(type).SaveAndReimport();
     public static TextureImporter GetImporter(this Texture2D t) => AssetImporter.GetAtPath(t.GetPath()) as TextureImporter;
+    
 }
