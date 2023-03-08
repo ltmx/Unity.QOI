@@ -1,6 +1,4 @@
-<p><br><br>
-    <img align="left" width="380px" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Unity.QOI%20Logo.png" alt="Unity.QOI">
-</p>
+![Unity.QOI Logo](https://github.com/LTMX/Unity.QOI/blob/main/.branding/LTMX_Unity_QOI_Github_Banner_Thin.png)
  
 ## QOI Importer & Exporter for Unity
 ![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI)
@@ -8,9 +6,11 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
 ![GitHub](https://img.shields.io/github/license/LTMX/Unity.QOI)
 
+<!--
 <br>
 <img align="left" src="https://raw.githubusercontent.com/LTMX/Banners-And-Buttons/main/Support%20Me%20Kofi%20Banner%20Shader%20Graph%20Mastery.png" width="140px"/>
 <br>
+-->
 
 ## Features
 
