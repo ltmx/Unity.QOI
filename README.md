@@ -5,6 +5,7 @@
 ![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?color=blueviolet)
 ![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
 ![GitHub](https://img.shields.io/github/license/LTMX/Unity.QOI)
+[![openupm](https://img.shields.io/npm/v/com.ltmx.unity.qoi?label=openupm&registry_uri=https://package.openupm.com)](https://openupm.com/packages/com.ltmx.unity.qoi/)
 
 <!--
 <br>
