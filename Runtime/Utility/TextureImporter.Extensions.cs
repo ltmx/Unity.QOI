@@ -1,11 +1,5 @@
-﻿using System;
-using System.Runtime.InteropServices;
-using Mono.Cecil;
-using UnityEditor;
+﻿using UnityEditor;
 using UnityEngine;
-using Unity.Mathematics;
-using static Unity.Mathematics.math;
-using Unity.Burst;
 
 public static class TextureImporterExtensions
 {
