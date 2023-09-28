@@ -26,8 +26,8 @@ anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to s
       <td>
         <a href="selftitled.html">
           <div class="imgWrap floatleft">
-            <h3>Right Click Action</h3>
-            <img src=".documentation/QOI%20Context%20Menu.png" height="128">
+            <h3>Context Menu Action</h3>
+            <img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/QOI%20Context%20Menu.png" height="128">
           </div>
         </a>
       </td>
@@ -35,7 +35,7 @@ anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to s
         <a href="12x5.html">
           <div class="imgWrap floatleft">
             <h3>Output Folder</h3>
-            <img src=".documentation/Qoi%20Output%20Folder.png" height="128">
+            <img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Output%20Folder.png" height="128">
           </div>
         </a>
       </td>
@@ -46,7 +46,7 @@ anyTexture2D.SaveToFile(TextureEncodingFormat.QOI) // Opens a native window to s
 ### Importer Inspector Parameters
 Most settings have been mapped from how unity imports other image formats, to ensure behaviour compatibility
 
-<img width="300" src=".documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
+<img width="300" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
 
 
 <!--
