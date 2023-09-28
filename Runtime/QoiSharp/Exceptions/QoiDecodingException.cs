@@ -1,8 +1,11 @@
 ﻿using System;
 
-public class QoiDecodingException : Exception
+namespace QoiSharp.Exceptions
 {
-    public QoiDecodingException(string message) : base(message)
+    public class QoiDecodingException : Exception
     {
+        public QoiDecodingException(string message) : base(message)
+        {
+        }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using UnityEditor;
 using UnityEngine;
-using static AssetManagementExtensions;
+using Utility;
+using static Utility.AssetManagementExtensions;
 using static ImageSaveUtility.TextureEncodingFormat;
 using static UnityEditor.AssetDatabase;
 
@@ -46,7 +47,7 @@ public static class ImageSaveUtility
         QOI => t.EncodeToQOI(),
         PNG => t.EncodeToPNG(),
         JPG => t.EncodeToJPG(),
-        EXR => t.EncodeToEXR(),
+        EXR => ImageProcessing.EncodeToEXR(t),
         TGA => t.EncodeToTGA(),
         // TODO: Should implement the rest of the formats which currently dont have any encoders/decoders
         // BMP => t.EncodeToBMP(),

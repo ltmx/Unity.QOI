@@ -2,7 +2,8 @@
     "name": "Unity.QOI",
     "rootNamespace": "",
     "references": [
-        "GUID:d8b63aba1907145bea998dd612889d6b"
+        "GUID:d8b63aba1907145bea998dd612889d6b",
+        "GUID:adfab0925da842c4db9a0d438ad877f7"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -1,10 +1,13 @@
 ﻿using UnityEditor;
 using UnityEditor.AssetImporters;
 
-public static class ScriptedImporterEditorExtensions
+namespace Utility
 {
-    public static SerializedProperty FindProperty(this ScriptedImporterEditor s, string name)
+    public static class ScriptedImporterEditorExtensions
     {
-        return s.serializedObject.FindProperty(name);
+        public static SerializedProperty FindProperty(this ScriptedImporterEditor s, string name)
+        {
+            return s.serializedObject.FindProperty(name);
+        }
     }
 }

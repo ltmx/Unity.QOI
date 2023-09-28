@@ -1,11 +1,14 @@
 using System;
 using System.IO;
+using QoiSharp;
+using QoiSharp.Codec;
 using UnityEditor;
 using UnityEngine;
 using UnityEditor.AssetImporters;
-using static ImageProcessing;
+using static Utility.ImageProcessing;
 using static UnityEditor.EditorUtility;
 using static UnityEngine.TextureFormat;
+using ColorSpace = QoiSharp.Codec.ColorSpace;
 
 /// <summary>
 /// Qoi Importer
