@@ -6,6 +6,10 @@ using QoiSharp;
 using QoiSharp.Codec;
 using Unity.Mathematics;
 using UnityEngine;
+using Qoi.Csharp;
+using UnityEditor;
+using Channels = Qoi.Csharp.Channels;
+using ColorSpace = Qoi.Csharp.ColorSpace;
 
 namespace Utility
 {
@@ -105,14 +109,20 @@ namespace Utility
     
         public static byte[] EncodeToQOI(this Texture2D t)
         {
+            var importer = t.GetImporter();
+            importer.npotScale = TextureImporterNPOTScale.None;
+            importer.SaveAndReimport();
             var copy = t.CopySafe();
         
-            bool hasAlpha = t.GetImporter().DoesSourceTextureHaveAlpha();
-            Channels channels = hasAlpha ? Channels.RgbWithAlpha : Channels.Rgb;
+            bool hasAlpha = importer.DoesSourceTextureHaveAlpha();
+            Channels channels = hasAlpha ? Channels.Rgba : Channels.Rgb;
         
             byte[] data = hasAlpha? copy.GetByteArray32() : copy.GetByteArray24();
-            var qoiImage = new QoiImage(data, t.width, t.height, channels); // Should be Integrated into a constructor
-            return QoiEncoder.Encode(qoiImage);
+            // byte[] data = hasAlpha? copy.GetRawTextureData<byte>().ToArray() : copy.GetByteArray24();
+            
+            // var qoiImage = new QoiImage(data, t.width, t.height, channels); // Should be Integrated into a constructor
+            return Encoder.Encode(data, t.width, t.height, channels, ColorSpace.SRgb);
+            // return QoiEncoder.Encode(qoiImage);
         }
     
         public static byte[] EncodeToEXR(this Texture2D t)

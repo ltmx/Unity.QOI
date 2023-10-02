@@ -1,14 +1,14 @@
 using System;
 using System.IO;
-using QoiSharp;
-using QoiSharp.Codec;
+using Qoi.Csharp;
 using UnityEditor;
 using UnityEngine;
 using UnityEditor.AssetImporters;
 using static Utility.ImageProcessing;
 using static UnityEditor.EditorUtility;
 using static UnityEngine.TextureFormat;
-using ColorSpace = QoiSharp.Codec.ColorSpace;
+
+// using ColorSpace = QoiSharp.Codec.ColorSpace;
 
 /// <summary>
 /// Qoi Importer
@@ -48,7 +48,8 @@ public class QoiImporter : ScriptedImporter
         var stream = File.OpenRead(ctx.assetPath);
         var data = new byte[stream.Length];
         stream.Read(data, 0, data.Length);
-        QoiImage img = QoiDecoder.Decode(data);
+        // QoiImage img = QoiDecoder.Decode(data);
+        var img = Decoder.Decode(data);
 
         if (img == null)
         {
@@ -59,21 +60,24 @@ public class QoiImporter : ScriptedImporter
         TextureFormat format = img.Channels switch
         {
             Channels.Rgb => RGB24,
-            Channels.RgbWithAlpha => RGBA32,
+            Channels.Rgba => RGBA32,
             // _ => ctx.LogImportError($"Unhandled QOI channel format '{img.Channels}'!");
             _ => throw new ArgumentOutOfRangeException(nameof(img.Channels), img.Channels, $"Unhandled QOI channel format '{img.Channels}'!")
         };
         // format = format == RGBA32 && !alphaIsTransparency ? RGB24 : format;
-        Texture2D tex = new(img.Width, img.Height, format, mipMapEnabled, img.ColorSpace == ColorSpace.Linear);
-        tex.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
-        //property setting;
-        tex.alphaIsTransparency = alphaIsTransparency; // Should be able to change it to true;
-        tex.wrapMode = wrapMode;
-        tex.filterMode = filterMode;
-        tex.anisoLevel = (int)anisoLevel; // mipMapBias = mipMapBias,
+        Texture2D tex = new((int)img.Width, (int)img.Height, format, mipMapEnabled, img.ColorSpace == Qoi.Csharp.ColorSpace.Linear)
+        {
+            name = Path.GetFileNameWithoutExtension(ctx.assetPath),
+            //property setting;
+            alphaIsTransparency = alphaIsTransparency, // Should be able to change it to true;
+            wrapMode = wrapMode,
+            filterMode = filterMode,
+            anisoLevel = anisoLevel // mipMapBias = mipMapBias,
+        };
+
         // dimension = dimension
         
-        tex.SetPixelData(img.Data.ToArray(), 0);
+        tex.SetPixelData(img.Bytes, 0);
         
         if (format == RGBA32) 
             textureFormat = crunchedCompression ? DXT5Crunched : DXT5; // For RGBA_32, use DXT5
