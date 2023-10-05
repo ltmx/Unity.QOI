@@ -15,8 +15,6 @@ namespace Utility
 {
     public static class ImageProcessing
     {
-
-
         public static string SaveToFile(this Texture2D tex, string _name)
         {
             var bytes = tex.EncodeToPNG();
@@ -32,8 +30,6 @@ namespace Utility
             File.WriteAllBytes(_path, bytes);
             return "path/"; // testing
         }
-
-
 
         public static float2 MinMaxTextureValue(this Texture2D tex)
         {

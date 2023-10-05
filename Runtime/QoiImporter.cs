@@ -1,9 +1,11 @@
 using System;
 using System.IO;
 using Qoi.Csharp;
+using Unity.Mathematics;
 using UnityEditor;
 using UnityEngine;
 using UnityEditor.AssetImporters;
+using Utility;
 using static Utility.ImageProcessing;
 using static UnityEditor.EditorUtility;
 using static UnityEngine.TextureFormat;
@@ -48,8 +50,8 @@ public class QoiImporter : ScriptedImporter
         var stream = File.OpenRead(ctx.assetPath);
         var data = new byte[stream.Length];
         stream.Read(data, 0, data.Length);
-        // QoiImage img = QoiDecoder.Decode(data);
-        var img = Decoder.Decode(data);
+        
+        QoiImage img = Decoder.Decode(data);
 
         if (img == null)
         {
@@ -72,20 +74,25 @@ public class QoiImporter : ScriptedImporter
             alphaIsTransparency = alphaIsTransparency, // Should be able to change it to true;
             wrapMode = wrapMode,
             filterMode = filterMode,
-            anisoLevel = anisoLevel // mipMapBias = mipMapBias,
+            anisoLevel = anisoLevel
         };
 
-        // dimension = dimension
         
         tex.SetPixelData(img.Bytes, 0);
-        
-        if (format == RGBA32) 
-            textureFormat = crunchedCompression ? DXT5Crunched : DXT5; // For RGBA_32, use DXT5
-        else textureFormat = crunchedCompression ? DXT1Crunched : DXT1; // For RGB_24, use DXT1
 
         tex.Apply();
-        CompressTexture(tex, textureFormat, compressionQuality);
-
+        
+        if (tex.width.ispow2() && tex.height.ispow2() && tex.width <= (int)maxTextureSize && tex.height <= (int)maxTextureSize)
+        {
+            textureFormat = format switch
+            {
+                RGBA32 when crunchedCompression => DXT5Crunched,
+                RGBA32 => DXT5,
+                _ => crunchedCompression ? DXT1Crunched : DXT1
+            };
+            CompressTexture(tex, textureFormat, compressionQuality);
+        }
+        
         stream.Close();
         
         ctx.AddObjectToAsset(tex.name, tex, tex);

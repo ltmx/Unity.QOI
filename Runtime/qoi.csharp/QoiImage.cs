@@ -3,17 +3,17 @@ namespace Qoi.Csharp
     /// <summary>
     /// A QOI image with the raw data and the metadata.
     /// </summary>
-    public class Image
+    public class QoiImage
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="Image"/> class with the given data.
+        /// Initializes a new instance of the <see cref="QoiImage"/> class with the given data.
         /// </summary>
         /// <param name="bytes">The raw color data.</param>
         /// <param name="width">The width of the image.</param>
         /// <param name="height">The height of the image.</param>
         /// <param name="channels">The number of channels of the image.</param>
         /// <param name="colorSpace">The color space of the image.</param>
-        public Image(byte[] bytes, uint width, uint height, Channels channels, ColorSpace colorSpace)
+        public QoiImage(byte[] bytes, uint width, uint height, Channels channels, ColorSpace colorSpace)
         {
             Bytes = bytes;
             Width = width;
@@ -22,7 +22,7 @@ namespace Qoi.Csharp
             ColorSpace = colorSpace;
         }
         
-        public Image(byte[] bytes, int width, int height, Channels channels, ColorSpace colorSpace) 
+        public QoiImage(byte[] bytes, int width, int height, Channels channels, ColorSpace colorSpace) 
             : this(bytes, (uint)width, (uint)height, channels, colorSpace) { }
 
         /// <summary>

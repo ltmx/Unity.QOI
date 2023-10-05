@@ -23,15 +23,23 @@ namespace Qoi.Csharp
             B = b;
             A = a;
         }
-        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public Pixel(ValueType r, ValueType g, ValueType b, ValueType a)
+        public Pixel(float r, float g, float b, float a)
         {
             R = (byte)r;
             G = (byte)g;
             B = (byte)b;
             A = (byte)a;
         }
+        
+        // [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // public Pixel(ValueType r, ValueType g, ValueType b, ValueType a)
+        // {
+        //     R = (byte)r;
+        //     G = (byte)g;
+        //     B = (byte)b;
+        //     A = (byte)a;
+        // }
 
         public override bool Equals(object obj) => obj is Pixel other && Equals(other);
 

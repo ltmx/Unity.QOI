@@ -34,7 +34,7 @@ namespace Qoi.Csharp
         /// </summary>
         /// <param name="input">The raw bytes of a QOI image.</param>
         /// <returns>An image containing color and meta data.</returns>
-        public static Image Decode(byte[] input)
+        public static QoiImage Decode(byte[] input)
         {
             using var memStream = new MemoryStream(input);
             using var binReader = new BinaryReader(memStream);
@@ -67,17 +67,58 @@ namespace Qoi.Csharp
             if (!Enum.IsDefined(typeof(ColorSpace), _colorSpace))
                 throw new InvalidHeaderException($"Value {_colorSpace} for ColorSpace is not valid.");
         }
+        
+        private void FlipVertically() 
+        {
+            int chunkSize = _channels == Channels.Rgba ? 4 : 3;
+            byte[] flippedChunks = new byte[_pixelBytes.Count];
+
+            var flipOffset = _pixelBytes.Count - chunkSize;
+
+            for (int i = 0; i < _pixelBytes.Count; i += chunkSize)
+            {
+                Array.Copy(_pixelBytes.ToArray(), flipOffset - i, flippedChunks, i, chunkSize);
+            }
+
+            _pixelBytes = flippedChunks.ToList();
+        }
 
         private void ParseChunks(uint width, uint height)
         {
             var pixelSize = 3;
             if (_channels == Channels.Rgba)
                 pixelSize = 4;
-
+        
             _pixelBytes = new List<byte>((int)(width * height * pixelSize));
+            
             while (_pixelBytes.Count < _pixelBytes.Capacity)
                 ParseChunk();
+
+            FlipVertically();
         }
+        // private void ParseChunks(uint width, uint height)
+        // {
+        //     var pixelSize = 3;
+        //     if (_channels == Channels.Rgba)
+        //         pixelSize = 4;
+        //
+        //     _pixelBytes = new byte[width * height * pixelSize];
+        //     for (uint y = 0; y < height; y++)
+        //     {
+        //         for (uint x = 0; x < width; x++)
+        //         {
+        //             int flipY = (int)(height - y - 1); // Flip the Y position
+        //             int index = (int)((width * flipY + x) * pixelSize); // Calculate the new position
+        //     
+        //             Pixel pixel = ParseChunk();
+        //             _pixelBytes[index + 0] = pixel.R;
+        //             _pixelBytes[index + 1] = pixel.G;
+        //             _pixelBytes[index + 2] = pixel.B;
+        //             if (_channels == Channels.Rgba)
+        //                 _pixelBytes[index + 3] = pixel.A;
+        //         }
+        //     }
+        // }
 
         private int CalculateIndex(Pixel pixel) => (pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) % CACHE_SIZE;
 
@@ -184,7 +225,7 @@ namespace Qoi.Csharp
             return value;
         }
 
-        private Image Decode()
+        private QoiImage Decode()
         {
             ParseMagic();
             var width = ReadUInt32BigEndian();
@@ -194,7 +235,7 @@ namespace Qoi.Csharp
             ParseChunks(width, height);
             ParseEndMarker();
             var bytes = _pixelBytes.ToArray();
-            return new Image(bytes, width, height, _channels.Value, _colorSpace.Value);
+            return new QoiImage(bytes, width, height, _channels.Value, _colorSpace.Value);
         }
 
         /// <summary>
