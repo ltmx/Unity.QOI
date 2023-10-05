@@ -7,7 +7,7 @@
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
   "description": "Utilities to Import and Export to the QOI Image Format",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "dependencies": { "com.unity.mathematics": "1.2.6" },
   "repository": "github:LTMX/Unity.QOI",
   "hideInEditor": false
