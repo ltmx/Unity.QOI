@@ -107,6 +107,7 @@ namespace Utility
         {
             var importer = t.GetImporter();
             importer.npotScale = TextureImporterNPOTScale.None;
+            importer.maxTextureSize = (int)MaxTextureSize.x16384;
             importer.SaveAndReimport();
             var copy = t.CopySafe();
         

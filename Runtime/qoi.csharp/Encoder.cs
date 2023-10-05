@@ -90,7 +90,7 @@ namespace Qoi.Csharp
             _binWriter.Write((byte)0);
             _binWriter.Write((byte)1);
         }
-
+        
         private void WriteChunks()
         {
             var pixelSize = _channels switch
@@ -99,17 +99,25 @@ namespace Qoi.Csharp
                 Channels.Rgba => 4,
                 _ => throw new ArgumentOutOfRangeException()
             };
-
-            for (var i = 0; i < _input.Length; i += pixelSize) {
-                var alpha = _channels == Channels.Rgba ? _input[i + 3] : (byte)255;
-                var next = new Pixel(_input[i], _input[i + 1], _input[i + 2], alpha);
-                WriteChunk(next);
+        
+            // flip image vertically
+            for (int y = 0; y < _height; y++)
+            {
+                var yCoord = (_height - y - 1) * _width;
+                for (int x = 0; x < _width; x++)
+                {
+                    int i = (yCoord + x) * pixelSize; // Index for pixel in flipped image
+                    // Span<byte> span = _input.AsSpan(i, 4);
+                    WriteChunk(new Pixel(_input[i], _input[i + 1], _input[i + 2], _channels == Channels.Rgba ? _input[i + 3] : (byte)255));
+                }
             }
-
+        
             if (_runLength != 0)
                 WriteRunChunk();
         }
 
+
+        
         private void WriteChunk(Pixel next)
         {
             while (true) {
@@ -118,14 +126,17 @@ namespace Qoi.Csharp
                     _runLength++;
                     _cache[index] = next;
                 }
-                else if (_runLength > 0) {
+                else if (_runLength > 0) 
+                {
                     WriteRunChunk();
                     _runLength = 0;
                     continue;
                 }
                 else if (_cache[index].Equals(next))
                     WriteIndexChunk(index);
-                else if (_prev.A == next.A) {
+                
+                else if (_prev.A == next.A) 
+                {
                     var diff = new Diff(_prev, next);
                     var lumaDiff = new LumaDiff(_prev, next);
                     if (diff.IsSmall())
@@ -193,6 +204,10 @@ namespace Qoi.Csharp
             _binWriter.Write(chunk);
         }
 
-        private int CalculateIndex(Pixel pixel) => (pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) % CACHE_SIZE;
+        // private int CalculateIndex(Pixel pixel) => (pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) % CACHE_SIZE;
+        private int CalculateIndex(Pixel pixel)
+        {
+            return (((pixel.R * 3) + (pixel.G * 5) + (pixel.B * 7) + (pixel.A * 11)) & (CACHE_SIZE - 1)); // 63 in your case
+        }
     }
 }
