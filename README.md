@@ -1,6 +1,6 @@
 ![Unity.QOI Logo](https://github.com/LTMX/Unity.QOI/blob/main/.branding/LTMX_Unity_QOI_Github_Banner_Thin.png)
  
-## QOI Importer & Exporter for Unity
+## QOI Image Format Importer & Exporter for Unity
 ![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI)
 ![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?color=blueviolet)
 ![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
