@@ -5,7 +5,6 @@ using Unity.Mathematics;
 using UnityEditor;
 using UnityEngine;
 using UnityEditor.AssetImporters;
-using Utility;
 using static Utility.ImageProcessing;
 using static UnityEditor.EditorUtility;
 using static UnityEngine.TextureFormat;

@@ -1,4 +1,6 @@
-﻿using UnityEditor;
+﻿#if UNITY_EDITOR
+
+using UnityEditor;
 using UnityEngine;
 
 namespace Utility
@@ -56,7 +58,10 @@ namespace Utility
         }
 
         public static void SetImporterType(this Texture2D texture, TextureImporterType type) => texture?.GetImporter()?.SetType(type).SaveAndReimport();
+        
         public static TextureImporter GetImporter(this Texture2D t) => AssetImporter.GetAtPath(t.GetPath()) as TextureImporter;
     
     }
 }
+
+#endif
