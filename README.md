@@ -1,11 +1,12 @@
 ![Unity.QOI Logo](https://github.com/LTMX/Unity.QOI/blob/main/.branding/LTMX_Unity_QOI_Github_Banner_Thin.png)
  
 ## QOI Image Format Importer & Exporter for Unity
-![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI)
-![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?color=blueviolet)
-![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?color=success)
-![GitHub](https://img.shields.io/github/license/LTMX/Unity.QOI)
-[![openupm](https://img.shields.io/npm/v/com.ltmx.unity.qoi?label=openupm&registry_uri=https://package.openupm.com)](https://openupm.com/packages/com.ltmx.unity.qoi/)
+![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI?style=for-the-badge)
+![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?style=for-the-badge&color=blueviolet)
+![GitHub top language](https://img.shields.io/github/languages/top/LTMX/Unity.QOI?style=for-the-badge&color=success)
+![GitHub](https://img.shields.io/github/license/LTMX/Unity.QOI?style=for-the-badge)
+[![openupm](https://img.shields.io/npm/v/com.ltmx.unity.qoi?style=for-the-badge&label=openupm&registry_uri=https://package.openupm.com)](https://openupm.com/packages/com.ltmx.unity.qoi/)
+[![Made for Unity](https://img.shields.io/badge/Made%20for-Unity-57b9d3.svg?style=for-the-badge&logo=unity&color=blueviolet)](https://unity3d.com)
 
 <!--
 <br>
