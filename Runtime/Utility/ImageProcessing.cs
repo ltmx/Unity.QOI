@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Numerics;
 using QoiSharp;
 using QoiSharp.Codec;
 using Unity.Mathematics;
@@ -15,22 +16,6 @@ namespace Utility
 {
     public static class ImageProcessing
     {
-        public static string SaveToFile(this Texture2D tex, string _name)
-        {
-            var bytes = tex.EncodeToPNG();
-            string path = Application.dataPath + "/" + _name + ".png";
-            File.WriteAllBytes(path, bytes);
-            return "Assets/" + _name + ".png";
-        }
-
-        public static string SaveToFile(this Texture2D tex, string _name, string path)
-        {
-            var bytes = tex.EncodeToPNG();
-            string _path = path + "/" + _name + ".png";
-            File.WriteAllBytes(_path, bytes);
-            return "path/"; // testing
-        }
-
         public static float2 MinMaxTextureValue(this Texture2D tex)
         {
             float2 minMax = new float2(1, 0);
@@ -43,7 +28,7 @@ namespace Utility
         }
     
         // Color Modification Functions
-        public static Color RemapMinMax(this Texture2D t, Color c) => c.unlerp(t.MinMaxTextureValue());
+        public static Color RemapMinMax(this Texture2D t, Color c) => c.Unlerp(t.MinMaxTextureValue());
         public static Color FlipNormalY(this Texture2D tex, Color c) => new(c.r, 1 - c.g, c.b, c.a);
         public static Color PackNormalAndHeight(Texture2D tex, Color c, Color d) => new(c.r, c.g, c.b, d.r);
         public static Color PackAlbedoAndAlpha(Texture2D tex, Color c, Color d) => new(c.r, c.g, c.b, d.r);
@@ -109,7 +94,8 @@ namespace Utility
             importer.npotScale = TextureImporterNPOTScale.None;
             importer.maxTextureSize = (int)MaxTextureSize.x16384;
             importer.SaveAndReimport();
-            var copy = t.CopySafe();
+            // var copy = t.CopySafe();
+            var copy = new Texture2D(1,1);
         
             bool hasAlpha = importer.DoesSourceTextureHaveAlpha();
             Channels channels = hasAlpha ? Channels.Rgba : Channels.Rgb;
@@ -124,7 +110,8 @@ namespace Utility
     
         public static byte[] EncodeToEXR(this Texture2D t)
         {
-            var copy = t.CopySafe();
+            // var copy = t.CopySafe();
+            var copy = new Texture2D(1,1);
             return copy.GetByteArray32();
         }
 
@@ -198,6 +185,5 @@ namespace Utility
             [Description("8192")] x8192 = 8192,
             [Description("16384")] x16384 = 16384
         }
-
     }
 }

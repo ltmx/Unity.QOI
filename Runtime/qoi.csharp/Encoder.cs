@@ -101,12 +101,12 @@ namespace Qoi.Csharp
             };
         
             // flip image vertically
-            for (int y = 0; y < _height; y++)
+            for (var y = 0; y < _height; y++)
             {
                 var yCoord = (_height - y - 1) * _width;
-                for (int x = 0; x < _width; x++)
+                for (var x = 0; x < _width; x++)
                 {
-                    int i = (yCoord + x) * pixelSize; // Index for pixel in flipped image
+                    var i = (yCoord + x) * pixelSize; // Index for pixel in flipped image
                     // Span<byte> span = _input.AsSpan(i, 4);
                     WriteChunk(new Pixel(_input[i], _input[i + 1], _input[i + 2], _channels == Channels.Rgba ? _input[i + 3] : (byte)255));
                 }
@@ -205,9 +205,6 @@ namespace Qoi.Csharp
         }
 
         // private int CalculateIndex(Pixel pixel) => (pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) % CACHE_SIZE;
-        private int CalculateIndex(Pixel pixel)
-        {
-            return (((pixel.R * 3) + (pixel.G * 5) + (pixel.B * 7) + (pixel.A * 11)) & (CACHE_SIZE - 1)); // 63 in your case
-        }
+        private int CalculateIndex(Pixel pixel) => (pixel.R * 3 + pixel.G * 5 + pixel.B * 7 + pixel.A * 11) & (CACHE_SIZE - 1); // 63 in your case
     }
 }

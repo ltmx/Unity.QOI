@@ -81,7 +81,7 @@ public class QoiImporter : ScriptedImporter
 
         tex.Apply();
         
-        if (tex.width.ispow2() && tex.height.ispow2() && tex.width <= (int)maxTextureSize && tex.height <= (int)maxTextureSize)
+        if (math.ispow2(tex.width) && math.ispow2(tex.height) && tex.width <= (int)maxTextureSize && tex.height <= (int)maxTextureSize)
         {
             textureFormat = format switch
             {

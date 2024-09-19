@@ -2,7 +2,7 @@ namespace Qoi.Csharp
 {
     /// <summary>
     /// Specifies the color space of the image.
-    /// </summary
+    /// </summary>
     public enum ColorSpace : byte
     {
         /// <summary>

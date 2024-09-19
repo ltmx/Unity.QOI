@@ -1,7 +1,6 @@
 ﻿using UnityEditor;
 using UnityEngine;
 using Utility;
-using static Utility.AssetManagementExtensions;
 using static ImageSaveUtility.TextureEncodingFormat;
 using static UnityEditor.AssetDatabase;
 
@@ -31,7 +30,7 @@ public static class ImageSaveUtility
         #endif
 
         // Focuses the file in the project window and highlights it
-        Selection.activeObject = LoadAtPath<Texture2D>("Assets/" + outputFolder + fileName);
+        Selection.activeObject = AssetManagementExtensions.LoadAtPath<Texture2D>("Assets/" + outputFolder + fileName);
         EditorGUIUtility.PingObject(Selection.activeObject);
 
         // Refresh the project window
