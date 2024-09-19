@@ -2,16 +2,27 @@
   "author": {
     "name": "LTMX",
     "email": "nicolasreinhard.pro@gmail.com",
-    "url": "https://www.youtube.com/channel/UCKQp3slLtSsRCWtQz67RjYQ"
+    "url": "https://linktr.ee/nicolasreinhard"
   },
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
-  "description": "Utilities to Import and Export to the QOI Image Format",
-  "version": "2.0.0",
-  "dependencies": { 
+  "description": "Import and Export to the QOI Image Format",
+  "version": "2.1.0",
+  "dependencies": {
     "com.unity.mathematics": "1.2.6",
     "com.ltmx.cs.extensions": "https://github.com/ltmx/Unity.CSharp.Extensions.git"
   },
   "repository": "github:LTMX/Unity.QOI",
-  "hideInEditor": false
+  "hideInEditor": false,
+  "keywords": [
+  "unity",
+  "qoi",
+  "image",
+  "format",
+  "ltmx",
+  "importer"
+  ],
+  "license": "MIT"
 }
+
+
