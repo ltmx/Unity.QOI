@@ -6,23 +6,24 @@
   },
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
-  "description": "Import and Export to the QOI Image Format",
-  "version": "2.1.0",
+  "description": "Import and Export to the QOI Image Format. Dependency free, with multithreaded and compute shader (GPU) encoding / decoding.",
+  "version": "3.0.0",
   "dependencies": {
-    "com.unity.mathematics": "1.2.6",
-    "com.ltmx.cs.extensions": "https://github.com/ltmx/Unity.CSharp.Extensions.git"
+    "com.unity.modules.imageconversion": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0"
   },
   "repository": "github:LTMX/Unity.QOI",
   "hideInEditor": false,
   "keywords": [
-  "unity",
-  "qoi",
-  "image",
-  "format",
-  "ltmx",
-  "importer"
+    "unity",
+    "qoi",
+    "image",
+    "format",
+    "ltmx",
+    "importer",
+    "compute shader",
+    "gpu"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "unity": "2022.3"
 }
-
-
