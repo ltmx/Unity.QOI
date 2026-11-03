@@ -4,15 +4,15 @@
 // Seekable QOI files cut the image into chunks of N pixels that only depend on themselves, so one GPU
 // thread can encode or decode each chunk independently while the result stays a standard QOI stream.
 //
-// Encode : EncodeChunks (1 thread / chunk, ops into a fixed size scratch slot per chunk)
+// Encode : EncodeChunks, counting pass (1 thread / chunk, only measures the size of every chunk)
 //        → ScanChunks   (prefix sum of chunk sizes = byte offset of every chunk)
-//        → ClearWords + CompactChunks (scatter every chunk to its final, unaligned, byte offset)
+//        → ClearWords   (zeroes the output, chunks share the words at their unaligned boundaries)
+//        → EncodeChunks, writing pass (every chunk writes its ops straight at its final byte offset)
 // Decode : DecodeChunks (1 thread / chunk, reads the seek table, writes pixels to a UAV texture)
 
 #pragma kernel EncodeChunks
 #pragma kernel ScanChunks
 #pragma kernel ClearWords
-#pragma kernel CompactChunks
 #pragma kernel DecodeChunks
 
 // Small groups: one thread per chunk gives few threads, spread them over as many compute units as possible
@@ -34,15 +34,12 @@ uint _Height;
 uint _PixelCount;
 uint _ChunkPixels;
 uint _ChunkCount;
-uint _ChunkBase;
-uint _ScratchStride; // bytes reserved per chunk in _Scratch, multiple of 4
-uint _WordCount;
 uint _ThreadCount;
+uint _WriteOps;      // EncodeChunks: 0 counts the bytes of every chunk, 1 writes them
 uint _SourceIsSRGB;  // the source view decodes sRGB on load, re-encode to get the stored bytes back
 uint _ForceOpaque;   // RGB files: ignore source alpha
 
 Texture2D<float4> _Source;
-RWByteAddressBuffer _Scratch;
 RWStructuredBuffer<uint> _ChunkSizes;
 RWStructuredBuffer<uint> _ChunkOffsets; // exclusive prefix sum, [_ChunkCount] holds the total
 RWByteAddressBuffer _Output;
@@ -51,8 +48,10 @@ ByteAddressBuffer _Input;
 StructuredBuffer<uint> _InputChunkOffsets; // _ChunkCount + 1 entries, the last one is the end of the op stream
 RWTexture2D<float4> _Target;
 
-// One 64 entry hash table per thread
+// One 64 entry hash table per thread, interleaved (entry h of thread t at h * CHUNK_THREADS + t) so the
+// threads of a group always hit different shared memory banks
 groupshared uint gs_Index[CHUNK_THREADS * 64];
+#define INDEX(h) gs_Index[(h) * CHUNK_THREADS + gi]
 groupshared uint gs_Scan[SCAN_THREADS];
 
 uint Hash(uint px)
@@ -91,26 +90,34 @@ uint LoadPixel(uint i)
     return v.r | (v.g << 8) | (v.b << 16) | (v.a << 24);
 }
 
-// Byte writer: packs bytes into 32 bit words before storing them
+// Byte writer at an absolute byte position of _Output. Bytes are packed into 32 bit words. The first and
+// last words of a chunk may be shared with the neighbouring chunks: they are merged with an atomic OR into
+// the zeroed output, every other word belongs to this chunk alone and is stored directly.
 struct Writer
 {
-    uint address;
+    uint position;
     uint word;
-    uint count;
-    uint total;
+    uint firstWord;
+    bool write;
 };
 
 void Put(inout Writer w, uint b)
 {
-    w.word |= (b & 0xFF) << (w.count * 8);
-    w.total++;
-    if (++w.count == 4)
+    if (w.write)
     {
-        _Scratch.Store(w.address, w.word);
-        w.address += 4;
-        w.word = 0;
-        w.count = 0;
+        uint lane = w.position & 3;
+        w.word |= (b & 0xFF) << (lane * 8);
+        if (lane == 3)
+        {
+            uint address = w.position & ~3u;
+            if ((address >> 2) == w.firstWord)
+                _Output.InterlockedOr(address, w.word);
+            else
+                _Output.Store(address, w.word);
+            w.word = 0;
+        }
     }
+    w.position++;
 }
 
 void PutColor(inout Writer w, uint px, uint byteCount)
@@ -132,9 +139,8 @@ uint2 ValidBit(uint h)
 [numthreads(CHUNK_THREADS, 1, 1)]
 void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
 {
-    uint slot = gi * 64;
     for (uint k = 0; k < 64; k++)
-        gs_Index[slot + k] = 0;
+        INDEX(k) = 0;
 
     uint chunk = id.x;
     if (chunk >= _ChunkCount)
@@ -147,10 +153,10 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
     // Chunk 0 shares the zeroed table of any decoder, later chunks only trust entries they wrote
     uint2 valid = chunk == 0 ? uint2(0xFFFFFFFF, 0xFFFFFFFF) : uint2(0, 0);
     Writer w;
-    w.address = chunk * _ScratchStride;
+    w.write = _WriteOps != 0;
+    w.position = w.write ? _ChunkOffsets[chunk] : 0;
     w.word = 0;
-    w.count = 0;
-    w.total = 0;
+    w.firstWord = w.position >> 2;
 
     uint prev = OPAQUE_BLACK;
     uint run = 0;
@@ -165,22 +171,22 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
     [unroll] for (uint bi = 0; bi < ENCODE_BATCH; bi++)
     {
         uint i = batchStart + bi;
-        if (i >= end)
-            break;
         uint px = batch[bi];
 
-        if (i == start && chunk > 0)
+        // No early exit from this loop: some shader compilers drop memory writes on paths ending with 'continue'
+        if (i >= end)
+        {
+        }
+        else if (i == start && chunk > 0)
         {
             Put(w, OP_RGBA);
             PutColor(w, px, 4);
             uint h0 = Hash(px);
-            gs_Index[slot + h0] = px;
+            INDEX(h0) = px;
             valid = ValidBit(h0);
             prev = px;
-            continue;
         }
-
-        if (px == prev)
+        else if (px == prev)
         {
             run++;
             if (run == 62 || i == lastPixel)
@@ -188,66 +194,74 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
                 Put(w, OP_RUN | (run - 1));
                 run = 0;
             }
-            continue;
-        }
-
-        if (run > 0)
-        {
-            Put(w, OP_RUN | (run - 1));
-            run = 0;
-        }
-
-        uint h = Hash(px);
-        if (IsValid(valid, h) && gs_Index[slot + h] == px)
-        {
-            Put(w, OP_INDEX | h);
         }
         else
         {
-            gs_Index[slot + h] = px;
-            valid |= ValidBit(h);
-
-            if ((px >> 24) == (prev >> 24))
+            if (run > 0)
             {
-                int vr = SignedByte((int)(px & 0xFF) - (int)(prev & 0xFF));
-                int vg = SignedByte((int)((px >> 8) & 0xFF) - (int)((prev >> 8) & 0xFF));
-                int vb = SignedByte((int)((px >> 16) & 0xFF) - (int)((prev >> 16) & 0xFF));
-                int vgr = SignedByte(vr - vg);
-                int vgb = SignedByte(vb - vg);
+                Put(w, OP_RUN | (run - 1));
+                run = 0;
+            }
 
-                if (vr > -3 && vr < 2 && vg > -3 && vg < 2 && vb > -3 && vb < 2)
-                {
-                    Put(w, OP_DIFF | (uint)(vr + 2) << 4 | (uint)(vg + 2) << 2 | (uint)(vb + 2));
-                }
-                else if (vgr > -9 && vgr < 8 && vg > -33 && vg < 32 && vgb > -9 && vgb < 8)
-                {
-                    Put(w, OP_LUMA | (uint)(vg + 32));
-                    Put(w, (uint)(vgr + 8) << 4 | (uint)(vgb + 8));
-                }
-                else
-                {
-                    Put(w, OP_RGB);
-                    PutColor(w, px, 3);
-                }
+            uint h = Hash(px);
+            if (IsValid(valid, h) && INDEX(h) == px)
+            {
+                Put(w, OP_INDEX | h);
             }
             else
             {
-                Put(w, OP_RGBA);
-                PutColor(w, px, 4);
-            }
-        }
+                INDEX(h) = px;
+                valid |= ValidBit(h);
 
-        prev = px;
+                if ((px >> 24) == (prev >> 24))
+                {
+                    int vr = SignedByte((int)(px & 0xFF) - (int)(prev & 0xFF));
+                    int vg = SignedByte((int)((px >> 8) & 0xFF) - (int)((prev >> 8) & 0xFF));
+                    int vb = SignedByte((int)((px >> 16) & 0xFF) - (int)((prev >> 16) & 0xFF));
+                    int vgr = SignedByte(vr - vg);
+                    int vgb = SignedByte(vb - vg);
+
+                    if (vr > -3 && vr < 2 && vg > -3 && vg < 2 && vb > -3 && vb < 2)
+                    {
+                        Put(w, OP_DIFF | (uint)(vr + 2) << 4 | (uint)(vg + 2) << 2 | (uint)(vb + 2));
+                    }
+                    else if (vgr > -9 && vgr < 8 && vg > -33 && vg < 32 && vgb > -9 && vgb < 8)
+                    {
+                        Put(w, OP_LUMA | (uint)(vg + 32));
+                        Put(w, (uint)(vgr + 8) << 4 | (uint)(vgb + 8));
+                    }
+                    else
+                    {
+                        Put(w, OP_RGB);
+                        PutColor(w, px, 3);
+                    }
+                }
+                else
+                {
+                    Put(w, OP_RGBA);
+                    PutColor(w, px, 4);
+                }
+            }
+
+            prev = px;
+        }
     }
     }
 
     // A run never crosses a chunk boundary (the CPU encoder closes it when the next chunk starts: same bytes)
     if (run > 0)
         Put(w, OP_RUN | (run - 1));
-    if (w.count > 0)
-        _Scratch.Store(w.address, w.word);
 
-    _ChunkSizes[chunk] = w.total;
+    if (w.write)
+    {
+        // Last, partial word: the next chunk starts inside it
+        if ((w.position & 3) != 0)
+            _Output.InterlockedOr(w.position & ~3u, w.word);
+    }
+    else
+    {
+        _ChunkSizes[chunk] = w.position;
+    }
 }
 
 [numthreads(SCAN_THREADS, 1, 1)]
@@ -285,47 +299,13 @@ void ScanChunks(uint gi : SV_GroupIndex)
         _ChunkOffsets[_ChunkCount] = gs_Scan[gi];
 }
 
+// Zeroes the words the ops will occupy. The size comes from the scan, so the CPU doesn't wait for it.
 [numthreads(CLEAR_THREADS, 1, 1)]
 void ClearWords(uint3 id : SV_DispatchThreadID)
 {
-    for (uint i = id.x; i < _WordCount; i += _ThreadCount)
+    uint words = (_ChunkOffsets[_ChunkCount] + 3) >> 2;
+    for (uint i = id.x; i < words; i += _ThreadCount)
         _Output.Store(i * 4, 0);
-}
-
-// One group per chunk. Chunks end at arbitrary bytes, so the first and last word of a chunk are shared
-// with its neighbours and merged with an atomic OR into the zeroed output.
-[numthreads(CHUNK_THREADS, 1, 1)]
-void CompactChunks(uint3 groupId : SV_GroupID, uint gi : SV_GroupIndex)
-{
-    uint chunk = groupId.x + _ChunkBase;
-    if (chunk >= _ChunkCount)
-        return;
-
-    uint size = _ChunkSizes[chunk];
-    uint dst = _ChunkOffsets[chunk];
-    uint dstEnd = dst + size;
-    uint src = chunk * _ScratchStride;
-    uint firstWord = dst >> 2;
-    uint lastWord = (dstEnd + 3) >> 2;
-
-    for (uint wd = firstWord + gi; wd < lastWord; wd += CHUNK_THREADS)
-    {
-        uint word = 0;
-        for (uint k = 0; k < 4; k++)
-        {
-            uint b = wd * 4 + k;
-            if (b >= dst && b < dstEnd)
-            {
-                uint s = src + b - dst;
-                word |= ((_Scratch.Load(s & ~3u) >> ((s & 3) * 8)) & 0xFF) << (k * 8);
-            }
-        }
-
-        if (wd == firstWord || wd == lastWord - 1)
-            _Output.InterlockedOr(wd * 4, word);
-        else
-            _Output.Store(wd * 4, word);
-    }
 }
 
 // Sequential byte reader that keeps the current 32 bit word in a register: most ops are 1 or 2 bytes,
@@ -353,9 +333,8 @@ uint ReadByte(inout Reader r)
 [numthreads(CHUNK_THREADS, 1, 1)]
 void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
 {
-    uint slot = gi * 64;
     for (uint k = 0; k < 64; k++)
-        gs_Index[slot + k] = 0;
+        INDEX(k) = 0;
 
     uint chunk = id.x;
     if (chunk >= _ChunkCount)
@@ -394,7 +373,7 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
             }
             else if ((b1 & 0xC0) == OP_INDEX)
             {
-                px = gs_Index[slot + b1];
+                px = INDEX(b1);
             }
             else if ((b1 & 0xC0) == OP_DIFF)
             {
@@ -411,7 +390,7 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
                 run = b1 & 0x3F;
             }
 
-            gs_Index[slot + Hash(px)] = px;
+            INDEX(Hash(px)) = px;
         }
 
         _Target[uint2(x, _Height - 1 - y)] = float4(px & 0xFF, (px >> 8) & 0xFF, (px >> 16) & 0xFF, px >> 24) / 255.0;

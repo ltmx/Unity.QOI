@@ -34,21 +34,18 @@ namespace LTMX.QOI
         private const int MaxGroups = 65535;
 
         private static ComputeShader s_Shader;
-        private static int s_EncodeKernel, s_ScanKernel, s_ClearKernel, s_CompactKernel, s_DecodeKernel;
+        private static int s_EncodeKernel, s_ScanKernel, s_ClearKernel, s_DecodeKernel;
 
         private static readonly int WidthId = Shader.PropertyToID("_Width");
         private static readonly int HeightId = Shader.PropertyToID("_Height");
         private static readonly int PixelCountId = Shader.PropertyToID("_PixelCount");
         private static readonly int ChunkPixelsId = Shader.PropertyToID("_ChunkPixels");
         private static readonly int ChunkCountId = Shader.PropertyToID("_ChunkCount");
-        private static readonly int ChunkBaseId = Shader.PropertyToID("_ChunkBase");
-        private static readonly int ScratchStrideId = Shader.PropertyToID("_ScratchStride");
-        private static readonly int WordCountId = Shader.PropertyToID("_WordCount");
         private static readonly int ThreadCountId = Shader.PropertyToID("_ThreadCount");
+        private static readonly int WriteOpsId = Shader.PropertyToID("_WriteOps");
         private static readonly int SourceIsSRGBId = Shader.PropertyToID("_SourceIsSRGB");
         private static readonly int ForceOpaqueId = Shader.PropertyToID("_ForceOpaque");
         private static readonly int SourceId = Shader.PropertyToID("_Source");
-        private static readonly int ScratchId = Shader.PropertyToID("_Scratch");
         private static readonly int ChunkSizesId = Shader.PropertyToID("_ChunkSizes");
         private static readonly int ChunkOffsetsId = Shader.PropertyToID("_ChunkOffsets");
         private static readonly int OutputId = Shader.PropertyToID("_Output");
@@ -66,7 +63,6 @@ namespace LTMX.QOI
                 s_EncodeKernel = s_Shader.FindKernel("EncodeChunks");
                 s_ScanKernel = s_Shader.FindKernel("ScanChunks");
                 s_ClearKernel = s_Shader.FindKernel("ClearWords");
-                s_CompactKernel = s_Shader.FindKernel("CompactChunks");
                 s_DecodeKernel = s_Shader.FindKernel("DecodeChunks");
                 return s_Shader;
             }
@@ -79,7 +75,7 @@ namespace LTMX.QOI
         /// One set of grow-only GPU buffers per operation in flight (sync calls reuse the same set).
         private sealed class Buffers
         {
-            public GraphicsBuffer Scratch, Sizes, Offsets, Output, Input, InputTable;
+            public GraphicsBuffer Sizes, Offsets, Output, Input, InputTable;
             // Set when the GPU may still read these buffers after the call returned (decoding does not wait)
             public GraphicsFence? InFlight;
 
@@ -87,8 +83,8 @@ namespace LTMX.QOI
 
             public void Release()
             {
-                Scratch?.Release(); Sizes?.Release(); Offsets?.Release(); Output?.Release(); Input?.Release(); InputTable?.Release();
-                Scratch = Sizes = Offsets = Output = Input = InputTable = null;
+                Sizes?.Release(); Offsets?.Release(); Output?.Release(); Input?.Release(); InputTable?.Release();
+                Sizes = Offsets = Output = Input = InputTable = null;
             }
         }
 
@@ -152,11 +148,13 @@ namespace LTMX.QOI
             {
                 var offsets = new uint[job.ChunkCount + 1];
                 job.Buffers.Offsets.GetData(offsets, 0, 0, offsets.Length);
-                int words = job.Compact(offsets[job.ChunkCount]);
-                var request = AsyncGPUReadback.Request(job.Buffers.Output, words * 4, 0);
-                request.WaitForCompletion();
-                if (request.hasError) throw new InvalidOperationException("QOI GPU readback failed.");
-                return job.BuildFile(request.GetData<byte>(), offsets);
+                var file = job.BuildFile(offsets);
+                // Straight from the GPU buffer into the file, no intermediate copy. Reads have to be whole words:
+                // the up to 3 extra bytes land in the end marker, written again right after.
+                int opsSize = (int)offsets[job.ChunkCount];
+                job.Buffers.Output.GetData(file, QoiCodec.HeaderSize, 0, (opsSize + 3) & ~3);
+                QoiCodec.WritePadding(file, QoiCodec.HeaderSize + opsSize);
+                return file;
             }
             finally
             {
@@ -181,10 +179,15 @@ namespace LTMX.QOI
                 }
 
                 var offsets = offsetsRequest.GetData<uint>().ToArray();
-                int words = job.Compact(offsets[job.ChunkCount]);
-                AsyncGPUReadback.Request(job.Buffers.Output, words * 4, 0, outputRequest =>
+                int opsSize = (int)offsets[job.ChunkCount];
+                AsyncGPUReadback.Request(job.Buffers.Output, Math.Max(4, (opsSize + 3) & ~3), 0, outputRequest =>
                 {
-                    byte[] file = outputRequest.hasError ? null : job.BuildFile(outputRequest.GetData<byte>(), offsets);
+                    byte[] file = null;
+                    if (!outputRequest.hasError)
+                    {
+                        file = job.BuildFile(offsets);
+                        NativeArray<byte>.Copy(outputRequest.GetData<byte>(), 0, file, QoiCodec.HeaderSize, opsSize);
+                    }
                     job.Dispose();
                     onComplete(file);
                 });
@@ -218,12 +221,13 @@ namespace LTMX.QOI
                 _channels = channels ?? (GraphicsFormatUtility.HasAlphaChannel(format) ? QoiChannels.Rgba : QoiChannels.Rgb);
                 _colorSpace = QoiTexture.GetColorSpace(source);
 
-                // Worst case is 5 bytes per pixel (QOI_OP_RGBA)
-                int scratchStride = (_chunkPixels * 5 + 3) & ~3;
                 Buffers = Rent();
-                var scratch = Ensure(ref Buffers.Scratch, GraphicsBuffer.Target.Raw, ChunkCount * (scratchStride / 4));
                 var sizes = Ensure(ref Buffers.Sizes, GraphicsBuffer.Target.Structured, ChunkCount);
                 var offsets = Ensure(ref Buffers.Offsets, GraphicsBuffer.Target.Structured, ChunkCount + 1);
+                // Worst case: 5 bytes per pixel (QOI_OP_RGBA) plus one byte for the RGBA op starting each chunk
+                long worstBytes = (long)pixelCount * 5 + ChunkCount;
+                int worstWords = (int)((worstBytes + 3) / 4);
+                var output = Ensure(ref Buffers.Output, GraphicsBuffer.Target.Raw, worstWords);
 
                 var cs = LoadedShader;
                 cs.SetInt(WidthId, _width);
@@ -231,51 +235,39 @@ namespace LTMX.QOI
                 cs.SetInt(PixelCountId, pixelCount);
                 cs.SetInt(ChunkPixelsId, _chunkPixels);
                 cs.SetInt(ChunkCountId, ChunkCount);
-                cs.SetInt(ScratchStrideId, scratchStride);
                 // sRGB textures are decoded when loaded in linear color space projects only
                 cs.SetInt(SourceIsSRGBId, isSRGB && QualitySettings.activeColorSpace == ColorSpace.Linear ? 1 : 0);
                 cs.SetInt(ForceOpaqueId, _channels == QoiChannels.Rgb ? 1 : 0);
 
                 cs.SetTexture(s_EncodeKernel, SourceId, source);
-                cs.SetBuffer(s_EncodeKernel, ScratchId, scratch);
                 cs.SetBuffer(s_EncodeKernel, ChunkSizesId, sizes);
-                cs.Dispatch(s_EncodeKernel, (ChunkCount + ChunkThreads - 1) / ChunkThreads, 1, 1);
+                cs.SetBuffer(s_EncodeKernel, ChunkOffsetsId, offsets);
+                cs.SetBuffer(s_EncodeKernel, OutputId, output);
+                int encodeGroups = (ChunkCount + ChunkThreads - 1) / ChunkThreads;
 
+                // 1. Size of every chunk
+                cs.SetInt(WriteOpsId, 0);
+                cs.Dispatch(s_EncodeKernel, encodeGroups, 1, 1);
+
+                // 2. Byte offset of every chunk
                 cs.SetBuffer(s_ScanKernel, ChunkSizesId, sizes);
                 cs.SetBuffer(s_ScanKernel, ChunkOffsetsId, offsets);
                 cs.Dispatch(s_ScanKernel, 1, 1, 1);
-            }
 
-            /// Gathers every chunk at its final offset once the total size is known. Returns the output size in words.
-            public int Compact(uint totalBytes)
-            {
-                var cs = LoadedShader;
-                int words = Mathf.Max(1, (int)((totalBytes + 3) / 4));
-                var output = Ensure(ref Buffers.Output, GraphicsBuffer.Target.Raw, words);
-
-                // Parameters may have been changed by another job since the constructor ran
-                cs.SetInt(ChunkCountId, ChunkCount);
-                cs.SetInt(ScratchStrideId, (_chunkPixels * 5 + 3) & ~3);
-
-                int clearGroups = Mathf.Min((words + ClearThreads - 1) / ClearThreads, 4096);
-                cs.SetInt(WordCountId, words);
+                // 3. Zero the output (chunk boundaries are merged with atomic ORs), the shader reads the size from the scan
+                int clearGroups = Mathf.Min((worstWords + ClearThreads - 1) / ClearThreads, 4096);
                 cs.SetInt(ThreadCountId, clearGroups * ClearThreads);
+                cs.SetBuffer(s_ClearKernel, ChunkOffsetsId, offsets);
                 cs.SetBuffer(s_ClearKernel, OutputId, output);
                 cs.Dispatch(s_ClearKernel, clearGroups, 1, 1);
 
-                cs.SetBuffer(s_CompactKernel, ScratchId, Buffers.Scratch);
-                cs.SetBuffer(s_CompactKernel, ChunkSizesId, Buffers.Sizes);
-                cs.SetBuffer(s_CompactKernel, ChunkOffsetsId, Buffers.Offsets);
-                cs.SetBuffer(s_CompactKernel, OutputId, output);
-                for (int chunkBase = 0; chunkBase < ChunkCount; chunkBase += MaxGroups)
-                {
-                    cs.SetInt(ChunkBaseId, chunkBase);
-                    cs.Dispatch(s_CompactKernel, Mathf.Min(MaxGroups, ChunkCount - chunkBase), 1, 1);
-                }
-                return words;
+                // 4. Every chunk writes its ops at its final offset. Encoding twice is cheaper than compacting scratch copies.
+                cs.SetInt(WriteOpsId, 1);
+                cs.Dispatch(s_EncodeKernel, encodeGroups, 1, 1);
             }
 
-            public byte[] BuildFile(NativeArray<byte> ops, uint[] offsets)
+            /// File with everything but the ops, which the caller copies at <see cref="QoiCodec.HeaderSize"/>
+            public byte[] BuildFile(uint[] offsets)
             {
                 int opsSize = (int)offsets[ChunkCount];
                 var file = new byte[QoiCodec.HeaderSize + opsSize + QoiCodec.PaddingSize + ChunkCount * 4 + 12 + QoiCodec.PaddingSize];
@@ -286,7 +278,6 @@ namespace LTMX.QOI
                 BinaryPrimitives.WriteUInt32BigEndian(span.Slice(8), (uint)_height);
                 file[12] = (byte)_channels;
                 file[13] = (byte)_colorSpace;
-                NativeArray<byte>.Copy(ops, 0, file, QoiCodec.HeaderSize, opsSize);
 
                 int p = QoiCodec.WritePadding(span, QoiCodec.HeaderSize + opsSize);
                 for (int c = 0; c < ChunkCount; c++, p += 4)
@@ -352,6 +343,29 @@ namespace LTMX.QOI
 
             if (mipChain) result.GenerateMips();
             return result;
+        }
+
+        /// <summary>
+        /// Decodes a seekable QOI file into an existing render texture, without allocating anything: the fastest way to
+        /// stream images. <paramref name="target"/> must be an R8G8B8A8_UNorm random write texture of the image size
+        /// (it receives the raw bytes, sRGB values are not converted).
+        /// Returns false, leaving <paramref name="target"/> untouched, for plain QOI files or without compute shaders.
+        /// </summary>
+        public static bool TryDecodeInto(byte[] data, RenderTexture target)
+        {
+            var header = QoiCodec.ReadHeader(data);
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (target.width != header.Width || target.height != header.Height || !target.enableRandomWrite
+                || target.graphicsFormat != GraphicsFormat.R8G8B8A8_UNorm)
+                throw new ArgumentException("The target must be an R8G8B8A8_UNorm random write texture of the image size.", nameof(target));
+
+            if (!IsSupported || !QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets)
+                || (offsets.Length - 1 + ChunkThreads - 1) / ChunkThreads > MaxGroups)
+                return false;
+
+            if (!target.IsCreated()) target.Create();
+            Dispatch(data, header, chunkPixels, offsets, target);
+            return true;
         }
 
         /// <summary>

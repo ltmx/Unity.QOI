@@ -34,6 +34,7 @@ existingTexture2D.LoadQOI(qoi);                      // like ImageConversion.Loa
 byte[] seekable = QoiGpu.Encode(renderTexture);      // GPU encode, only the compressed bytes are read back
 QoiGpu.EncodeAsync(renderTexture, bytes => ...);     // same, without stalling the main thread
 RenderTexture gpuTex = QoiGpu.Decode(seekable);      // GPU decode, pixels never touch the CPU
+QoiGpu.TryDecodeInto(seekable, existingUNormRT);     // same into a reused render texture: no allocation, fastest
 Texture2D gpuTex2D = QoiGpu.DecodeToTexture2D(seekable); // same, as a Texture2D (slower: Unity allocates a CPU copy)
 QoiGpu.ReleaseResources();                           // frees the pooled GPU buffers
 
@@ -60,15 +61,17 @@ The size overhead is about 9 bytes per chunk (≈0.1% on typical images).
 The importer decodes seekable files on all cores, `QoiGpu` decodes them with one GPU thread per chunk.
 
 ### Compute shader codec
-- **Encode**: one thread per chunk writes its ops to a scratch slot, a prefix sum computes the final byte offset of
-  every chunk, then a compaction pass scatters the chunks at their (unaligned) offsets. Works on any GPU texture
-  (render textures, compressed, HDR...) and its output is byte identical to the CPU seekable encoder.
+- **Encode**: a first pass with one thread per chunk only measures the size of every chunk, a prefix sum turns the
+  sizes into byte offsets, then a second pass writes every chunk straight at its final (unaligned) offset. Encoding
+  twice is cheaper than compacting scratch copies, and the ops are read back directly into the returned file.
+  Works on any GPU texture (render textures, compressed, HDR...) and its output is byte identical to the CPU seekable encoder.
 - **Decode**: one thread per chunk replays the ops (reading 32 bit words, not bytes) and writes into a random write
   render texture, raw-copied into an sRGB one when needed. No pixel data goes through the CPU, and the upload
   writes the op stream straight into GPU visible memory.
 - GPU buffers are pooled (guarded by GPU fences) so repeated calls don't reallocate. Files encoded on the GPU use
   1024 pixel chunks: more GPU threads when decoding, for ~0.4% size.
-- 4096x4096 on an RTX 4070: GPU encode ~23 ms (CPU 140 ms), GPU decode ~9 ms (CPU parallel 23 ms, single thread 100 ms).
+- 4096x4096 on an RTX 4070, including upload / readback and waiting for the GPU: GPU encode ~14 ms (CPU ~190 ms),
+  GPU decode ~16 ms, ~11 ms into a reused render texture (CPU parallel ~35 ms, single thread ~190 ms).
 - Plain (non seekable) files and machines without compute shaders fall back to the CPU codec.
 
 <table>
