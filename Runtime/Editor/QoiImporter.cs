@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
@@ -10,7 +11,7 @@ namespace LTMX.QOI.Editor
     /// <summary>
     /// Qoi Importer
     /// </summary>
-    [ScriptedImporter(3, "qoi")]
+    [ScriptedImporter(4, "qoi")]
     public class QoiImporter : ScriptedImporter
     {
         // Texture import settings
@@ -37,8 +38,10 @@ namespace LTMX.QOI.Editor
             QoiImage img;
             try
             {
-                // Seekable QOI files are decoded on all cores
-                img = QoiCodec.Decode(File.ReadAllBytes(ctx.assetPath), 0, flipY: true);
+                var data = File.ReadAllBytes(ctx.assetPath);
+                var header = QoiCodec.ReadHeader(data);
+                // Unity has no RGB HDR texture format: HDR RGB files are expanded to RGBA. Seekable files are decoded on all cores.
+                img = QoiCodec.Decode(data, header.IsHdr && header.Channels == QoiChannels.Rgb ? 4 : 0, flipY: true);
             }
             catch (QoiException e)
             {
@@ -50,6 +53,9 @@ namespace LTMX.QOI.Editor
             int height = img.Height;
             int channels = img.PixelChannels;
             byte[] pixels = img.Pixels;
+            var sampleFormat = img.SampleFormat;
+            bool hdr = sampleFormat != QoiSampleFormat.Byte;
+            bool single = img.Channels == QoiChannels.R;
 
             // Same order as the TextureImporter: power of two scaling first, then max size. Sprites keep their size.
             int targetWidth = width, targetHeight = height;
@@ -67,13 +73,19 @@ namespace LTMX.QOI.Editor
                 targetHeight = Math.Max(1, Math.Min(maxSize, (int)Math.Round(targetHeight * scale)));
             }
 
-            pixels = Resize(pixels, width, height, targetWidth, targetHeight, channels);
+            pixels = Resize(pixels, width, height, targetWidth, targetHeight, channels, sampleFormat);
             width = targetWidth;
             height = targetHeight;
 
             bool hasAlpha = img.Channels == QoiChannels.Rgba;
-            bool linear = !sRGBTexture || textureType == TextureImporterType.NormalMap;
-            var format = hasAlpha ? RGBA32 : RGB24;
+            // HDR and single channel data is linear
+            bool linear = !sRGBTexture || textureType == TextureImporterType.NormalMap || hdr || single;
+            var format = sampleFormat switch
+            {
+                QoiSampleFormat.Half => single ? RHalf : RGBAHalf,
+                QoiSampleFormat.Float => single ? RFloat : RGBAFloat,
+                _ => single ? R8 : hasAlpha ? RGBA32 : RGB24
+            };
 
             var tex = new Texture2D(width, height, format, mipMapEnabled, linear)
             {
@@ -86,11 +98,15 @@ namespace LTMX.QOI.Editor
             tex.SetPixelData(pixels, 0);
             tex.Apply(mipMapEnabled);
 
-            // Block compression needs dimensions that are multiples of 4
-            if (compression != TextureImporterCompression.Uncompressed && width % 4 == 0 && height % 4 == 0)
+            // Block compression needs dimensions that are multiples of 4.
+            // HDR: BC6H (no alpha, so RGBA and single channel HDR stay uncompressed). Single channel: BC4.
+            bool canCompress = !hdr || (!single && !hasAlpha);
+            if (compression != TextureImporterCompression.Uncompressed && canCompress && width % 4 == 0 && height % 4 == 0)
             {
                 var compressedFormat = compression switch
                 {
+                    _ when hdr => BC6H,
+                    _ when single => BC4,
                     TextureImporterCompression.CompressedHQ => BC7,
                     _ when hasAlpha => crunchedCompression ? DXT5Crunched : DXT5,
                     _ => crunchedCompression ? DXT1Crunched : DXT1
@@ -126,12 +142,21 @@ namespace LTMX.QOI.Editor
         }
 
         /// Separable tent filter resize. The filter widens when shrinking so every source pixel contributes.
-        private static byte[] Resize(byte[] src, int srcWidth, int srcHeight, int dstWidth, int dstHeight, int channels)
+        private static byte[] Resize(byte[] src, int srcWidth, int srcHeight, int dstWidth, int dstHeight, int channels, QoiSampleFormat format)
         {
             if (srcWidth == dstWidth && srcHeight == dstHeight) return src;
 
             var (xStart, xWeights) = Weights(srcWidth, dstWidth);
             var (yStart, yWeights) = Weights(srcHeight, dstHeight);
+            var halfs = format == QoiSampleFormat.Half ? MemoryMarshal.Cast<byte, ushort>(src.AsSpan()).ToArray() : null;
+            var floats = format == QoiSampleFormat.Float ? MemoryMarshal.Cast<byte, float>(src.AsSpan()).ToArray() : null;
+
+            float Sample(int i) => format switch
+            {
+                QoiSampleFormat.Half => Mathf.HalfToFloat(halfs[i]),
+                QoiSampleFormat.Float => floats[i],
+                _ => src[i]
+            };
 
             // Horizontal pass into a float buffer of dstWidth x srcHeight
             var tmp = new float[dstWidth * srcHeight * channels];
@@ -143,12 +168,15 @@ namespace LTMX.QOI.Editor
                 for (int k = 0; k < w.Length; k++)
                 {
                     int s = (y * srcWidth + Math.Clamp(xStart[x] + k, 0, srcWidth - 1)) * channels;
-                    for (int c = 0; c < channels; c++) tmp[o + c] += src[s + c] * w[k];
+                    for (int c = 0; c < channels; c++) tmp[o + c] += Sample(s + c) * w[k];
                 }
             }
 
             // Vertical pass
-            var dst = new byte[dstWidth * dstHeight * channels];
+            int count = dstWidth * dstHeight * channels;
+            var dst = new byte[count * QoiCodec.BytesPerSample(format)];
+            var dstHalfs = MemoryMarshal.Cast<byte, ushort>(dst.AsSpan());
+            var dstFloats = MemoryMarshal.Cast<byte, float>(dst.AsSpan());
             for (int y = 0; y < dstHeight; y++)
             {
                 var w = yWeights[y];
@@ -160,7 +188,12 @@ namespace LTMX.QOI.Editor
                         float sum = 0;
                         for (int k = 0; k < w.Length; k++)
                             sum += tmp[(Math.Clamp(yStart[y] + k, 0, srcHeight - 1) * dstWidth + x) * channels + c] * w[k];
-                        dst[o + c] = (byte)Math.Clamp((int)(sum + 0.5f), 0, 255);
+                        switch (format)
+                        {
+                            case QoiSampleFormat.Half: dstHalfs[o + c] = Mathf.FloatToHalf(sum); break;
+                            case QoiSampleFormat.Float: dstFloats[o + c] = sum; break;
+                            default: dst[o + c] = (byte)Math.Clamp((int)(sum + 0.5f), 0, 255); break;
+                        }
                     }
                 }
             }

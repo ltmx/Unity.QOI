@@ -13,7 +13,8 @@ namespace LTMX.QOI
     /// <para>
     /// Encoding works on any 2D texture or render texture already on the GPU (compressed, non readable, HDR...):
     /// only the compressed bytes are read back. The output is a seekable QOI file (see <see cref="QoiCodec"/>),
-    /// readable by any QOI decoder.
+    /// readable by any QOI decoder for 8 bit RGB / RGBA files. HDR (half / float) and single channel files use
+    /// the extensions described in <see cref="QoiCodec"/>.
     /// </para>
     /// <para>
     /// Decoding a seekable file runs one GPU thread per chunk and writes straight into a render texture, the pixels
@@ -31,14 +32,21 @@ namespace LTMX.QOI
 
         private const int ChunkThreads = 32;
         private const int ClearThreads = 256;
+        private const int ComposeThreads = 8;
         private const int MaxGroups = 65535;
 
         private static ComputeShader s_Shader;
         private static int s_EncodeKernel, s_ScanKernel, s_ClearKernel, s_DecodeKernel;
+        private static int s_DecodePlanarKernel, s_ClearScratchKernel, s_ComposeKernel;
 
         private static readonly int WidthId = Shader.PropertyToID("_Width");
         private static readonly int HeightId = Shader.PropertyToID("_Height");
         private static readonly int PixelCountId = Shader.PropertyToID("_PixelCount");
+        private static readonly int StreamPixelsId = Shader.PropertyToID("_StreamPixels");
+        private static readonly int PlanesId = Shader.PropertyToID("_Planes");
+        private static readonly int SampleFormatId = Shader.PropertyToID("_SampleFormat");
+        private static readonly int ChannelsId = Shader.PropertyToID("_Channels");
+        private static readonly int ClearWordCountId = Shader.PropertyToID("_ClearWordCount");
         private static readonly int ChunkPixelsId = Shader.PropertyToID("_ChunkPixels");
         private static readonly int ChunkCountId = Shader.PropertyToID("_ChunkCount");
         private static readonly int ThreadCountId = Shader.PropertyToID("_ThreadCount");
@@ -64,6 +72,9 @@ namespace LTMX.QOI
                 s_ScanKernel = s_Shader.FindKernel("ScanChunks");
                 s_ClearKernel = s_Shader.FindKernel("ClearWords");
                 s_DecodeKernel = s_Shader.FindKernel("DecodeChunks");
+                s_DecodePlanarKernel = s_Shader.FindKernel("DecodeChunksPlanar");
+                s_ClearScratchKernel = s_Shader.FindKernel("ClearScratch");
+                s_ComposeKernel = s_Shader.FindKernel("ComposePlanar");
                 return s_Shader;
             }
         }
@@ -140,10 +151,13 @@ namespace LTMX.QOI
         /// <summary>
         /// Encodes mip 0 of a 2D texture into a seekable QOI file. Blocks until the GPU is done.
         /// </summary>
-        /// <param name="channels">Defaults to RGBA when the texture format has an alpha channel.</param>
-        public static byte[] Encode(Texture source, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null)
+        /// <param name="channels">Defaults to <see cref="QoiChannels.R"/> for single channel formats, RGBA when the texture format
+        /// has an alpha channel, RGB otherwise.</param>
+        /// <param name="sampleFormat">Defaults to <see cref="QoiTexture.GetSampleFormat"/>: half / float for HDR textures.</param>
+        public static byte[] Encode(Texture source, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null,
+            QoiSampleFormat? sampleFormat = null)
         {
-            var job = new EncodeJob(source, chunkPixels, channels);
+            var job = new EncodeJob(source, chunkPixels, channels, sampleFormat);
             try
             {
                 var offsets = new uint[job.ChunkCount + 1];
@@ -166,9 +180,10 @@ namespace LTMX.QOI
         /// Encodes mip 0 of a 2D texture into a seekable QOI file without stalling: the result is delivered
         /// a few frames later through <paramref name="onComplete"/> (null when the readback failed).
         /// </summary>
-        public static void EncodeAsync(Texture source, Action<byte[]> onComplete, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null)
+        public static void EncodeAsync(Texture source, Action<byte[]> onComplete, int chunkPixels = DefaultChunkPixels,
+            QoiChannels? channels = null, QoiSampleFormat? sampleFormat = null)
         {
-            var job = new EncodeJob(source, chunkPixels, channels);
+            var job = new EncodeJob(source, chunkPixels, channels, sampleFormat);
             AsyncGPUReadback.Request(job.Buffers.Offsets, (job.ChunkCount + 1) * 4, 0, offsetsRequest =>
             {
                 if (offsetsRequest.hasError)
@@ -200,10 +215,9 @@ namespace LTMX.QOI
             public readonly Buffers Buffers;
 
             private readonly int _width, _height, _chunkPixels;
-            private readonly QoiChannels _channels;
-            private readonly QoiColorSpace _colorSpace;
+            private readonly QoiHeader _header;
 
-            public EncodeJob(Texture source, int chunkPixels, QoiChannels? channels)
+            public EncodeJob(Texture source, int chunkPixels, QoiChannels? channels, QoiSampleFormat? sampleFormat)
             {
                 if (!IsSupported) throw new NotSupportedException("Compute shaders are not supported, use QoiTexture.EncodeToQOI instead.");
                 if (source == null) throw new ArgumentNullException(nameof(source));
@@ -211,33 +225,35 @@ namespace LTMX.QOI
 
                 _width = source.width;
                 _height = source.height;
-                int pixelCount = _width * _height;
-                // Keep the dispatch within the group count limit
-                _chunkPixels = Mathf.Max(chunkPixels, 64, (pixelCount + MaxGroups * ChunkThreads - 1) / (MaxGroups * ChunkThreads));
-                ChunkCount = (pixelCount + _chunkPixels - 1) / _chunkPixels;
-
                 var format = source.graphicsFormat;
+                var samples = sampleFormat ?? QoiTexture.GetSampleFormat(source);
+                var resolvedChannels = channels ?? (QoiTexture.IsSingleChannel(format) ? QoiChannels.R
+                    : GraphicsFormatUtility.HasAlphaChannel(format) ? QoiChannels.Rgba : QoiChannels.Rgb);
+                _header = new QoiHeader(_width, _height, resolvedChannels, QoiTexture.GetColorSpace(source, samples), samples);
+
+                int pixelCount = _width * _height;
+                if ((long)pixelCount * _header.BytesPerSample > QoiCodec.MaxPixels) throw new QoiException("Image too large to encode.");
+                int streamPixels = _header.StreamPixelCount;
+                // Keep the dispatch within the group count limit
+                _chunkPixels = Mathf.Max(chunkPixels, 64, (streamPixels + MaxGroups * ChunkThreads - 1) / (MaxGroups * ChunkThreads));
+                ChunkCount = (streamPixels + _chunkPixels - 1) / _chunkPixels;
                 bool isSRGB = GraphicsFormatUtility.IsSRGBFormat(format);
-                _channels = channels ?? (GraphicsFormatUtility.HasAlphaChannel(format) ? QoiChannels.Rgba : QoiChannels.Rgb);
-                _colorSpace = QoiTexture.GetColorSpace(source);
 
                 Buffers = Rent();
                 var sizes = Ensure(ref Buffers.Sizes, GraphicsBuffer.Target.Structured, ChunkCount);
                 var offsets = Ensure(ref Buffers.Offsets, GraphicsBuffer.Target.Structured, ChunkCount + 1);
                 // Worst case: 5 bytes per pixel (QOI_OP_RGBA) plus one byte for the RGBA op starting each chunk
-                long worstBytes = (long)pixelCount * 5 + ChunkCount;
+                long worstBytes = (long)streamPixels * 5 + ChunkCount;
                 int worstWords = (int)((worstBytes + 3) / 4);
                 var output = Ensure(ref Buffers.Output, GraphicsBuffer.Target.Raw, worstWords);
 
                 var cs = LoadedShader;
-                cs.SetInt(WidthId, _width);
-                cs.SetInt(HeightId, _height);
-                cs.SetInt(PixelCountId, pixelCount);
+                SetFormat(cs, _header);
                 cs.SetInt(ChunkPixelsId, _chunkPixels);
                 cs.SetInt(ChunkCountId, ChunkCount);
                 // sRGB textures are decoded when loaded in linear color space projects only
                 cs.SetInt(SourceIsSRGBId, isSRGB && QualitySettings.activeColorSpace == ColorSpace.Linear ? 1 : 0);
-                cs.SetInt(ForceOpaqueId, _channels == QoiChannels.Rgb ? 1 : 0);
+                cs.SetInt(ForceOpaqueId, _header.Channels == QoiChannels.Rgb ? 1 : 0);
 
                 cs.SetTexture(s_EncodeKernel, SourceId, source);
                 cs.SetBuffer(s_EncodeKernel, ChunkSizesId, sizes);
@@ -272,12 +288,7 @@ namespace LTMX.QOI
                 int opsSize = (int)offsets[ChunkCount];
                 var file = new byte[QoiCodec.HeaderSize + opsSize + QoiCodec.PaddingSize + ChunkCount * 4 + 12 + QoiCodec.PaddingSize];
                 var span = file.AsSpan();
-
-                BinaryPrimitives.WriteUInt32BigEndian(span, QoiCodec.Magic);
-                BinaryPrimitives.WriteUInt32BigEndian(span.Slice(4), (uint)_width);
-                BinaryPrimitives.WriteUInt32BigEndian(span.Slice(8), (uint)_height);
-                file[12] = (byte)_channels;
-                file[13] = (byte)_colorSpace;
+                QoiCodec.WriteHeader(span, _header);
 
                 int p = QoiCodec.WritePadding(span, QoiCodec.HeaderSize + opsSize);
                 for (int c = 0; c < ChunkCount; c++, p += 4)
@@ -292,15 +303,18 @@ namespace LTMX.QOI
         // Decoding -------------------------------------------------------------------------------------------
 
         /// <summary>
-        /// Decodes a QOI file into a GPU only render texture (R8G8B8A8, sRGB unless the file or <paramref name="linear"/>
-        /// says otherwise). This is the fast path: seekable files never touch the CPU. Plain files are decoded on the CPU.
+        /// Decodes a QOI file into a GPU only render texture. This is the fast path: seekable files never touch the CPU.
+        /// Plain files are decoded on the CPU. The format is <see cref="QoiTexture.GetGraphicsFormat"/>: R8G8B8A8 (sRGB unless the
+        /// file or <paramref name="linear"/> says otherwise), R8 for single channel files, R16 / R16G16B16A16 SFloat for half files,
+        /// R32 / R32G32B32A32 SFloat for float files.
         /// </summary>
         public static RenderTexture Decode(byte[] data, bool mipChain = false, bool? linear = null)
         {
             var header = QoiCodec.ReadHeader(data);
             // Gamma color space projects sample everything as is
             bool srgb = !(linear ?? header.ColorSpace == QoiColorSpace.Linear) && QualitySettings.activeColorSpace == ColorSpace.Linear;
-            var format = srgb ? GraphicsFormat.R8G8B8A8_SRGB : GraphicsFormat.R8G8B8A8_UNorm;
+            var format = QoiTexture.GetGraphicsFormat(header, srgb);
+            srgb = GraphicsFormatUtility.IsSRGBFormat(format);
             var descriptor = new RenderTextureDescriptor(header.Width, header.Height, format, 0)
             {
                 useMipMap = mipChain,
@@ -314,7 +328,7 @@ namespace LTMX.QOI
                 if (srgb)
                 {
                     // Compute shaders can't write sRGB textures: decode into a UNorm one and copy the raw bytes
-                    var uav = RenderTexture.GetTemporary(new RenderTextureDescriptor(header.Width, header.Height, GraphicsFormat.R8G8B8A8_UNorm, 0)
+                    var uav = RenderTexture.GetTemporary(new RenderTextureDescriptor(header.Width, header.Height, GraphicsFormatUtility.GetLinearFormat(format), 0)
                     {
                         enableRandomWrite = true
                     });
@@ -347,17 +361,20 @@ namespace LTMX.QOI
 
         /// <summary>
         /// Decodes a seekable QOI file into an existing render texture, without allocating anything: the fastest way to
-        /// stream images. <paramref name="target"/> must be an R8G8B8A8_UNorm random write texture of the image size
-        /// (it receives the raw bytes, sRGB values are not converted).
+        /// stream images. <paramref name="target"/> must be a random write texture of the image size, in the format given by
+        /// <c>QoiTexture.GetGraphicsFormat(header, srgb: false)</c>: R8G8B8A8_UNorm for 8 bit RGB / RGBA files (it receives the
+        /// raw bytes, sRGB values are not converted), R8_UNorm for single channel files, R16 / R16G16B16A16 / R32 / R32G32B32A32
+        /// SFloat for HDR files.
         /// Returns false, leaving <paramref name="target"/> untouched, for plain QOI files or without compute shaders.
         /// </summary>
         public static bool TryDecodeInto(byte[] data, RenderTexture target)
         {
             var header = QoiCodec.ReadHeader(data);
             if (target == null) throw new ArgumentNullException(nameof(target));
+            var expected = QoiTexture.GetGraphicsFormat(header, false);
             if (target.width != header.Width || target.height != header.Height || !target.enableRandomWrite
-                || target.graphicsFormat != GraphicsFormat.R8G8B8A8_UNorm)
-                throw new ArgumentException("The target must be an R8G8B8A8_UNorm random write texture of the image size.", nameof(target));
+                || target.graphicsFormat != expected)
+                throw new ArgumentException($"The target must be an {expected} random write texture of the image size.", nameof(target));
 
             if (!IsSupported || !QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets)
                 || (offsets.Length - 1 + ChunkThreads - 1) / ChunkThreads > MaxGroups)
@@ -395,15 +412,39 @@ namespace LTMX.QOI
                 table.SetData(offsets);
 
                 var cs = LoadedShader;
-                cs.SetInt(WidthId, header.Width);
-                cs.SetInt(HeightId, header.Height);
-                cs.SetInt(PixelCountId, header.PixelCount);
+                SetFormat(cs, header);
                 cs.SetInt(ChunkPixelsId, chunkPixels);
                 cs.SetInt(ChunkCountId, offsets.Length - 1);
-                cs.SetBuffer(s_DecodeKernel, InputId, buffers.Input);
-                cs.SetBuffer(s_DecodeKernel, InputChunkOffsetsId, table);
-                cs.SetTexture(s_DecodeKernel, TargetId, target);
-                cs.Dispatch(s_DecodeKernel, (offsets.Length - 1 + ChunkThreads - 1) / ChunkThreads, 1, 1);
+                int decodeGroups = (offsets.Length - 1 + ChunkThreads - 1) / ChunkThreads;
+
+                if (header.BytesPerSample == 1)
+                {
+                    cs.SetBuffer(s_DecodeKernel, InputId, buffers.Input);
+                    cs.SetBuffer(s_DecodeKernel, InputChunkOffsetsId, table);
+                    cs.SetTexture(s_DecodeKernel, TargetId, target);
+                    cs.Dispatch(s_DecodeKernel, decodeGroups, 1, 1);
+                }
+                else
+                {
+                    // Byte planes are decoded by different threads: samples are assembled in a zeroed scratch buffer first
+                    int words = header.PixelCount * (int)header.Channels;
+                    var scratch = Ensure(ref buffers.Output, GraphicsBuffer.Target.Raw, words);
+                    int clearGroups = Mathf.Min((words + ClearThreads - 1) / ClearThreads, 4096);
+                    cs.SetInt(ThreadCountId, clearGroups * ClearThreads);
+                    cs.SetInt(ClearWordCountId, words);
+                    cs.SetBuffer(s_ClearScratchKernel, OutputId, scratch);
+                    cs.Dispatch(s_ClearScratchKernel, clearGroups, 1, 1);
+
+                    cs.SetBuffer(s_DecodePlanarKernel, InputId, buffers.Input);
+                    cs.SetBuffer(s_DecodePlanarKernel, InputChunkOffsetsId, table);
+                    cs.SetBuffer(s_DecodePlanarKernel, OutputId, scratch);
+                    cs.Dispatch(s_DecodePlanarKernel, decodeGroups, 1, 1);
+
+                    cs.SetBuffer(s_ComposeKernel, OutputId, scratch);
+                    cs.SetTexture(s_ComposeKernel, TargetId, target);
+                    cs.Dispatch(s_ComposeKernel, (header.Width + ComposeThreads - 1) / ComposeThreads,
+                        (header.Height + ComposeThreads - 1) / ComposeThreads, 1);
+                }
 
                 // The call returns before the GPU reads the upload buffer: keep this set out of reach until it has
                 if (SystemInfo.supportsGraphicsFence)
@@ -420,6 +461,17 @@ namespace LTMX.QOI
             {
                 Return(buffers);
             }
+        }
+
+        private static void SetFormat(ComputeShader cs, in QoiHeader header)
+        {
+            cs.SetInt(WidthId, header.Width);
+            cs.SetInt(HeightId, header.Height);
+            cs.SetInt(PixelCountId, header.PixelCount);
+            cs.SetInt(StreamPixelsId, header.StreamPixelCount);
+            cs.SetInt(PlanesId, header.BytesPerSample);
+            cs.SetInt(SampleFormatId, (int)header.SampleFormat);
+            cs.SetInt(ChannelsId, (int)header.Channels);
         }
 
         /// Writes straight into GPU visible memory when the platform allows it, about 2-3x faster than SetData

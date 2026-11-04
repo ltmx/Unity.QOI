@@ -9,17 +9,30 @@
 //        → ClearWords   (zeroes the output, chunks share the words at their unaligned boundaries)
 //        → EncodeChunks, writing pass (every chunk writes its ops straight at its final byte offset)
 // Decode : DecodeChunks (1 thread / chunk, reads the seek table, writes pixels to a UAV texture)
+//
+// HDR (half / float) files store one byte plane after the other (most significant first) in a single stream.
+// EncodeChunks loads the byte of the current plane. Decoding goes through a scratch buffer: ClearScratch,
+// DecodeChunksPlanar (ORs every byte into one 32 bit word per sample), then ComposePlanar writes the texture.
+// Single channel files (_Channels == 1) use their own diff op 0x40 | (d + 32) and literal 0xFE v.
 
 #pragma kernel EncodeChunks
 #pragma kernel ScanChunks
 #pragma kernel ClearWords
 #pragma kernel DecodeChunks
+#pragma kernel DecodeChunksPlanar
+#pragma kernel ClearScratch
+#pragma kernel ComposePlanar
 
 // Small groups: one thread per chunk gives few threads, spread them over as many compute units as possible
 #define CHUNK_THREADS 32
 #define ENCODE_BATCH 8
 #define SCAN_THREADS 256
 #define CLEAR_THREADS 256
+#define COMPOSE_THREADS 8
+
+#define FORMAT_BYTE  0
+#define FORMAT_HALF  1
+#define FORMAT_FLOAT 2
 
 #define OP_INDEX 0x00
 #define OP_DIFF  0x40
@@ -31,7 +44,12 @@
 
 uint _Width;
 uint _Height;
-uint _PixelCount;
+uint _PixelCount;    // pixels of the image
+uint _StreamPixels;  // pixels of the op stream: _PixelCount * _Planes
+uint _Planes;        // bytes per sample
+uint _SampleFormat;
+uint _Channels;      // 1, 3 or 4
+uint _ClearWordCount;
 uint _ChunkPixels;
 uint _ChunkCount;
 uint _ThreadCount;
@@ -78,13 +96,34 @@ float LinearToSRGB(float c)
     return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(abs(c), 1.0 / 2.4) - 0.055;
 }
 
-// QOI rows go top to bottom, Unity texture rows go bottom to top
+// Stream pixel i is byte plane i / _PixelCount of pixel i % _PixelCount.
+// QOI rows go top to bottom, Unity texture rows go bottom to top.
 uint LoadPixel(uint i)
 {
-    float4 c = saturate(_Source.Load(int3(i % _Width, _Height - 1 - i / _Width, 0)));
-    if (_SourceIsSRGB)
-        c.rgb = float3(LinearToSRGB(c.r), LinearToSRGB(c.g), LinearToSRGB(c.b));
-    uint4 v = (uint4)(c * 255.0 + 0.5);
+    uint plane = 0;
+    if (_Planes > 1)
+    {
+        plane = i / _PixelCount;
+        i -= plane * _PixelCount;
+    }
+
+    float4 c = _Source.Load(int3(i % _Width, _Height - 1 - i / _Width, 0));
+    uint4 v;
+    if (_SampleFormat == FORMAT_BYTE)
+    {
+        c = saturate(c);
+        if (_SourceIsSRGB)
+            c.rgb = float3(LinearToSRGB(c.r), LinearToSRGB(c.g), LinearToSRGB(c.b));
+        v = (uint4)(c * 255.0 + 0.5);
+    }
+    else
+    {
+        uint4 bits = _SampleFormat == FORMAT_HALF ? f32tof16(c) : asuint(c);
+        v = (bits >> (8 * (_Planes - 1 - plane))) & 0xFF;
+    }
+
+    if (_Channels == 1)
+        return v.r | OPAQUE_BLACK;
     if (_ForceOpaque)
         v.a = 255;
     return v.r | (v.g << 8) | (v.b << 16) | (v.a << 24);
@@ -147,8 +186,8 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
         return;
 
     uint start = chunk * _ChunkPixels;
-    uint end = min(start + _ChunkPixels, _PixelCount);
-    uint lastPixel = _PixelCount - 1;
+    uint end = min(start + _ChunkPixels, _StreamPixels);
+    uint lastPixel = _StreamPixels - 1;
 
     // Chunk 0 shares the zeroed table of any decoder, later chunks only trust entries they wrote
     uint2 valid = chunk == 0 ? uint2(0xFFFFFFFF, 0xFFFFFFFF) : uint2(0, 0);
@@ -179,8 +218,8 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
         }
         else if (i == start && chunk > 0)
         {
-            Put(w, OP_RGBA);
-            PutColor(w, px, 4);
+            Put(w, _Channels == 1 ? OP_RGB : OP_RGBA);
+            PutColor(w, px, _Channels == 1 ? 1 : 4);
             uint h0 = Hash(px);
             INDEX(h0) = px;
             valid = ValidBit(h0);
@@ -213,7 +252,20 @@ void EncodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
                 INDEX(h) = px;
                 valid |= ValidBit(h);
 
-                if ((px >> 24) == (prev >> 24))
+                if (_Channels == 1)
+                {
+                    int d = SignedByte((int)(px & 0xFF) - (int)(prev & 0xFF));
+                    if (d >= -32 && d < 32)
+                    {
+                        Put(w, OP_DIFF | (uint)(d + 32));
+                    }
+                    else
+                    {
+                        Put(w, OP_RGB);
+                        Put(w, px);
+                    }
+                }
+                else if ((px >> 24) == (prev >> 24))
                 {
                     int vr = SignedByte((int)(px & 0xFF) - (int)(prev & 0xFF));
                     int vg = SignedByte((int)((px >> 8) & 0xFF) - (int)((prev >> 8) & 0xFF));
@@ -308,6 +360,14 @@ void ClearWords(uint3 id : SV_DispatchThreadID)
         _Output.Store(i * 4, 0);
 }
 
+// Zeroes the HDR decoding scratch buffer (one word per sample)
+[numthreads(CLEAR_THREADS, 1, 1)]
+void ClearScratch(uint3 id : SV_DispatchThreadID)
+{
+    for (uint i = id.x; i < _ClearWordCount; i += _ThreadCount)
+        _Output.Store(i * 4, 0);
+}
+
 // Sequential byte reader that keeps the current 32 bit word in a register: most ops are 1 or 2 bytes,
 // so a memory load is only needed every few ops instead of for every byte
 struct Reader
@@ -330,13 +390,13 @@ uint ReadByte(inout Reader r)
     return b;
 }
 
-[numthreads(CHUNK_THREADS, 1, 1)]
-void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
+// Decodes one chunk of the stream. Byte files write the texture directly, planar (HDR) files OR their bytes into
+// the _Output scratch buffer. 'planar' is a literal in both kernels: each one is compiled without the other path.
+void DecodeChunk(uint chunk, uint gi, bool planar)
 {
     for (uint k = 0; k < 64; k++)
         INDEX(k) = 0;
 
-    uint chunk = id.x;
     if (chunk >= _ChunkCount)
         return;
 
@@ -346,9 +406,13 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
     r.word = 0;
     uint opsEnd = _InputChunkOffsets[chunk + 1];
     uint start = chunk * _ChunkPixels;
-    uint end = min(start + _ChunkPixels, _PixelCount);
-    uint x = start % _Width;
-    uint y = start / _Width;
+    uint end = min(start + _ChunkPixels, _StreamPixels);
+    uint plane = start / _PixelCount;
+    uint p = start - plane * _PixelCount;
+    uint x = p % _Width;
+    uint y = p / _Width;
+    uint shift = 8 * (_Planes - 1 - plane);
+    bool single = _Channels == 1;
     uint px = OPAQUE_BLACK;
     uint run = 0;
 
@@ -363,8 +427,15 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
             uint b1 = ReadByte(r);
             if (b1 == OP_RGB)
             {
-                uint cr = ReadByte(r), cg = ReadByte(r), cb = ReadByte(r);
-                px = (px & 0xFF000000) | cr | (cg << 8) | (cb << 16);
+                if (single)
+                {
+                    px = ReadByte(r) | OPAQUE_BLACK;
+                }
+                else
+                {
+                    uint cr = ReadByte(r), cg = ReadByte(r), cb = ReadByte(r);
+                    px = (px & 0xFF000000) | cr | (cg << 8) | (cb << 16);
+                }
             }
             else if (b1 == OP_RGBA)
             {
@@ -377,7 +448,10 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
             }
             else if ((b1 & 0xC0) == OP_DIFF)
             {
-                px = AddRGB(px, (int)((b1 >> 4) & 3) - 2, (int)((b1 >> 2) & 3) - 2, (int)(b1 & 3) - 2);
+                if (single)
+                    px = ((px + (b1 & 0x3F) - 32) & 0xFF) | OPAQUE_BLACK;
+                else
+                    px = AddRGB(px, (int)((b1 >> 4) & 3) - 2, (int)((b1 >> 2) & 3) - 2, (int)(b1 & 3) - 2);
             }
             else if ((b1 & 0xC0) == OP_LUMA)
             {
@@ -393,7 +467,51 @@ void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
             INDEX(Hash(px)) = px;
         }
 
-        _Target[uint2(x, _Height - 1 - y)] = float4(px & 0xFF, (px >> 8) & 0xFF, (px >> 16) & 0xFF, px >> 24) / 255.0;
+        if (planar)
+        {
+            // One word per sample, QOI pixel order
+            uint address = (y * _Width + x) * _Channels * 4;
+            for (uint c = 0; c < _Channels; c++)
+                _Output.InterlockedOr(address + c * 4, ((px >> (c * 8)) & 0xFF) << shift);
+        }
+        else
+        {
+            _Target[uint2(x, _Height - 1 - y)] = float4(px & 0xFF, (px >> 8) & 0xFF, (px >> 16) & 0xFF, px >> 24) / 255.0;
+        }
+
         if (++x == _Width) { x = 0; y++; }
+        if (y == _Height) { y = 0; shift -= 8; } // next byte plane
     }
+}
+
+[numthreads(CHUNK_THREADS, 1, 1)]
+void DecodeChunks(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
+{
+    DecodeChunk(id.x, gi, false);
+}
+
+[numthreads(CHUNK_THREADS, 1, 1)]
+void DecodeChunksPlanar(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
+{
+    DecodeChunk(id.x, gi, true);
+}
+
+// Turns the scratch words of DecodeChunksPlanar into texels
+[numthreads(COMPOSE_THREADS, COMPOSE_THREADS, 1)]
+void ComposePlanar(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Width || id.y >= _Height)
+        return;
+
+    uint address = ((_Height - 1 - id.y) * _Width + id.x) * _Channels * 4;
+    uint4 bits = uint4(_Output.Load(address), 0, 0, 0);
+    if (_Channels >= 3)
+        bits.yz = uint2(_Output.Load(address + 4), _Output.Load(address + 8));
+    if (_Channels == 4)
+        bits.w = _Output.Load(address + 12);
+
+    float4 c = _SampleFormat == FORMAT_HALF ? f16tof32(bits) : asfloat(bits);
+    if (_Channels != 4)
+        c.a = 1;
+    _Target[id.xy] = c;
 }

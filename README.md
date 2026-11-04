@@ -19,6 +19,7 @@
 - **No dependencies**: a single self contained codec, nothing to install besides this package
 - Imports `.qoi` files as textures (RGB & RGBA, sRGB / linear, mipmaps, max size, DXT / BC7 / Crunch compression, sprites)
 - Exports any `Texture2D` to QOI / PNG / JPG / EXR / TGA, even non readable and compressed ones
+- **HDR (half & float) and single channel QOI** extensions: lossless, CPU & GPU, imported as RHalf / RGBAHalf / RFloat / RGBAFloat / R8
 - Bit exact with the reference [qoi.h](https://github.com/phoboslab/qoi) encoder
 - Runtime API (works in builds, not only in the editor)
 - **Seekable QOI**: optional, 100% spec compliant variant that decodes on all CPU cores or on the GPU
@@ -27,7 +28,8 @@
 ```csharp
 using LTMX.QOI;
 
-byte[] qoi = anyTexture.EncodeToQOI();              // any Texture, readable or not
+byte[] qoi = anyTexture.EncodeToQOI();              // any Texture, readable or not (HDR / single channel picked from its format)
+byte[] hdr = anyTexture.EncodeToQOI(sampleFormat: QoiSampleFormat.Half, channels: QoiChannels.Rgb); // or forced
 Texture2D tex = QoiTexture.LoadQOI(qoi);             // CPU decode + upload
 existingTexture2D.LoadQOI(qoi);                      // like ImageConversion.LoadImage
 
@@ -40,6 +42,8 @@ QoiGpu.ReleaseResources();                           // frees the pooled GPU buf
 
 QoiImage img = QoiCodec.Decode(bytes, outputChannels: 4, flipY: true); // raw codec, no UnityEngine needed
 byte[] file = QoiCodec.Encode(rgba, width, height, 4, QoiChannels.Rgba, seekChunkPixels: QoiCodec.DefaultChunkPixels);
+byte[] halfFile = QoiCodec.Encode(halfBits /* ushort[] */, width, height, 4, QoiChannels.Rgba); // float[] works too
+Span<ushort> halfs = QoiCodec.Decode(halfFile).AsHalfs();                 // AsFloats() for float files
 
 anyTexture2D.SaveToFile(TextureEncodingFormat.QOI);  // editor: opens a native save panel
 ```
@@ -59,6 +63,22 @@ header | ops | end marker | u32 offsets[chunkCount] | u32 chunkPixels | u32 chun
 
 The size overhead is about 9 bytes per chunk (≈0.1% on typical images).
 The importer decodes seekable files on all cores, `QoiGpu` decodes them with one GPU thread per chunk.
+
+### HDR and single channel extensions
+Standard QOI only stores 8 bit RGB / RGBA. This package extends it, keeping the same ops and the 14 byte header:
+
+- The header channel byte becomes `channelCount | sampleFormat << 4`: channel count 1 (R), 3 or 4, sample format
+  0 (8 bit), 1 (half) or 2 (float). Standard files are unchanged, extended files are cleanly rejected by other QOI decoders.
+- **Single channel**: same index and run ops, `0x40 | (d + 32)` stores a difference in [-32, 31] in one byte,
+  `0xFE v` a literal. 1 to 2 bytes per pixel at most, instead of up to 4 bytes when stored as gray RGB.
+- **HDR**: half and float samples are stored as raw bits (lossless, negative / huge values / NaN kept) split into byte
+  planes, most significant first. The op stream encodes plane 0 of every pixel, then plane 1, ... like an 8 bit image
+  2 or 4 times taller, so every QOI op, seekable chunks, multithreaded and GPU decoding work as is.
+  The high planes (sign, exponent) compress very well, the low mantissa bytes less so.
+- Textures: `EncodeToQOI` / `QoiGpu.Encode` pick the format from the texture (R8 / R16 / RHalf / RFloat... → R,
+  half / BC6H → half, float and 16 bit normalized → float). Decoding gives R8_UNorm, R16 / R16G16B16A16 SFloat or
+  R32 / R32G32B32A32 SFloat textures (RGB HDR files become RGBA). The importer compresses HDR RGB to BC6H and
+  8 bit single channel to BC4.
 
 ### Compute shader codec
 - **Encode**: a first pass with one thread per chunk only measures the size of every chunk, a prefix sum turns the

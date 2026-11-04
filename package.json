@@ -6,8 +6,8 @@
   },
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
-  "description": "Import and Export to the QOI Image Format. Dependency free, with multithreaded and compute shader (GPU) encoding / decoding.",
-  "version": "3.0.0",
+  "description": "Import and Export to the QOI Image Format, with HDR (half / float) and single channel extensions. Dependency free, with multithreaded and compute shader (GPU) encoding / decoding.",
+  "version": "3.1.0",
   "dependencies": {
     "com.unity.modules.imageconversion": "1.0.0",
     "com.unity.modules.imgui": "1.0.0"
