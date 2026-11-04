@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using Unity.Collections;
@@ -24,10 +25,16 @@ namespace LTMX.QOI
     /// GPU buffers are pooled between calls, call <see cref="ReleaseResources"/> to free them.
     /// </para>
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Statics stay valid across play mode: cached shader / kernels, and pooled buffers freed by ReleaseResources.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     public static class QoiGpu
     {
+        /// <summary>
         /// Chunk size used by <see cref="Encode"/>: smaller chunks mean more GPU threads when decoding,
         /// for about 9 extra bytes per chunk.
+        /// </summary>
         public const int DefaultChunkPixels = 1024;
 
         private const int ChunkThreads = 32;
@@ -84,7 +91,7 @@ namespace LTMX.QOI
         // Buffer pool ----------------------------------------------------------------------------------------
 
         /// One set of grow-only GPU buffers per operation in flight (sync calls reuse the same set).
-        private sealed class Buffers
+        internal sealed class Buffers
         {
             public GraphicsBuffer Sizes, Offsets, Output, Input, InputTable;
             // Set when the GPU may still read these buffers after the call returned (decoding does not wait)
@@ -99,7 +106,7 @@ namespace LTMX.QOI
             }
         }
 
-        private static readonly List<Buffers> s_Pool = new List<Buffers>();
+        private static readonly List<Buffers> s_Pool = new();
         private static bool s_LockUnsupported;
 
         static QoiGpu()
@@ -115,7 +122,7 @@ namespace LTMX.QOI
         {
             for (int i = s_Pool.Count - 1; i >= 0; i--)
             {
-                var buffers = s_Pool[i];
+                Buffers buffers = s_Pool[i];
                 if (!buffers.Idle) continue;
                 s_Pool.RemoveAt(i);
                 buffers.InFlight = null;
@@ -132,7 +139,7 @@ namespace LTMX.QOI
         public static void ReleaseResources()
         {
             // Releasing is safe even while in flight: Unity keeps GPU resources alive until the GPU is done
-            foreach (var buffers in s_Pool) buffers.Release();
+            foreach (Buffers buffers in s_Pool) buffers.Release();
             s_Pool.Clear();
         }
 
@@ -154,8 +161,7 @@ namespace LTMX.QOI
         /// <param name="channels">Defaults to <see cref="QoiChannels.R"/> for single channel formats, RGBA when the texture format
         /// has an alpha channel, RGB otherwise.</param>
         /// <param name="sampleFormat">Defaults to <see cref="QoiTexture.GetSampleFormat"/>: half / float for HDR textures.</param>
-        public static byte[] Encode(Texture source, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null,
-            QoiSampleFormat? sampleFormat = null)
+        public static byte[] Encode(Texture source, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null,QoiSampleFormat? sampleFormat = null)
         {
             var job = new EncodeJob(source, chunkPixels, channels, sampleFormat);
             try
@@ -209,7 +215,138 @@ namespace LTMX.QOI
             });
         }
 
-        private sealed class EncodeJob : IDisposable
+        /// <summary>
+        /// Starts encoding mip 0 of a 2D texture into a seekable QOI file and returns at once. Poll the request with
+        /// <see cref="EncodeRequest.Update"/> (or block with <see cref="EncodeRequest.WaitForCompletion"/>): unlike
+        /// <see cref="EncodeAsync"/> it needs no player loop, so it also works in editor loops and batch mode, and
+        /// many encodes can be in flight while the GPU keeps rendering.
+        /// </summary>
+        /// <param name="colorSpace">Overrides the header's color space, which otherwise follows the source.</param>
+        public static EncodeRequest RequestEncode(Texture source, int chunkPixels = DefaultChunkPixels, QoiChannels? channels = null,
+            QoiSampleFormat? sampleFormat = null, QoiColorSpace? colorSpace = null) =>
+            new(new EncodeJob(source, chunkPixels, channels, sampleFormat, colorSpace));
+
+        /// <summary>
+        /// A GPU encode in flight, see <see cref="RequestEncode"/>. Its GPU buffers stay out of the pool until it is done.
+        /// <para>
+        /// The ops are read back into native memory: <see cref="WriteTo"/> streams the file from there without building
+        /// it in a managed array, from any thread once <see cref="Done"/>. Call <see cref="Dispose"/> afterwards
+        /// (reading <see cref="Result"/> builds the array and frees the native memory).
+        /// </para>
+        /// </summary>
+        public sealed class EncodeRequest : IDisposable
+        {
+            private EncodeJob _job;
+            private AsyncGPUReadbackRequest _offsetsRequest, _outputRequest;
+            private uint[] _offsets;
+            private int _opsSize;
+            private bool _outputRequested;
+            private NativeArray<byte> _ops;
+            private byte[] _result;
+
+            internal EncodeRequest(EncodeJob job)
+            {
+                _job = job;
+                _offsetsRequest = AsyncGPUReadback.Request(job.Buffers.Offsets, (job.ChunkCount + 1) * 4, 0);
+            }
+
+            /// True once <see cref="Result"/> is set or the readback failed.
+            public bool Done { get; private set; }
+
+            public bool HasError { get; private set; }
+
+            /// The encoded file, once <see cref="Done"/> (null on error). Built on first access.
+            public byte[] Result
+            {
+                get
+                {
+                    if (_result != null || !Done || HasError || !_ops.IsCreated) return _result;
+                    _result = _job.BuildFile(_offsets);
+                    NativeArray<byte>.Copy(_ops, 0, _result, QoiCodec.HeaderSize, _opsSize);
+                    _ops.Dispose();
+                    return _result;
+                }
+            }
+
+            /// Size of the encoded file, once <see cref="Done"/> without error.
+            public int FileSize => _job.FileSize(_offsets);
+
+            /// <summary>
+            /// Writes the encoded file to <paramref name="stream"/>. Any thread may call it once <see cref="Done"/> without error.</summary>
+            ///
+            public void WriteTo(Stream stream)
+            {
+                if (!Done || HasError) throw new InvalidOperationException("The encode is not done or failed.");
+                if (_result != null)
+                {
+                    stream.Write(_result, 0, _result.Length);
+                    return;
+                }
+
+                Span<byte> header = stackalloc byte[QoiCodec.HeaderSize];
+                QoiCodec.WriteHeader(header, _job.Header);
+                stream.Write(header);
+                stream.Write(_ops.AsReadOnlySpan().Slice(0, _opsSize));
+                stream.Write(_job.BuildTrailer(_offsets));
+            }
+
+            /// Frees the native copy of the ops.
+            public void Dispose()
+            {
+                if (_ops.IsCreated) _ops.Dispose();
+            }
+
+            /// Advances the request without blocking.
+            public void Update() => Advance(false);
+
+            /// Blocks until the file is ready.
+            public void WaitForCompletion() => Advance(true);
+
+            private void Advance(bool wait)
+            {
+                if (Done) return;
+                if (!_outputRequested)
+                {
+                    if (wait) _offsetsRequest.WaitForCompletion();
+                    else if (!_offsetsRequest.done) _offsetsRequest.Update();
+                    if (!_offsetsRequest.done) return;
+                    if (_offsetsRequest.hasError)
+                    {
+                        Finish(false);
+                        return;
+                    }
+
+                    _offsets = _offsetsRequest.GetData<uint>().ToArray();
+                    _opsSize = (int)_offsets[_job.ChunkCount];
+                    // The size of the ops is only known now
+                    _ops = new NativeArray<byte>(Math.Max(4, (_opsSize + 3) & ~3), Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                    _outputRequest = AsyncGPUReadback.RequestIntoNativeArray(ref _ops, _job.Buffers.Output, _ops.Length, 0);
+                    _outputRequested = true;
+                }
+
+                if (wait) _outputRequest.WaitForCompletion();
+                else if (!_outputRequest.done) _outputRequest.Update();
+                if (!_outputRequest.done) return;
+                if (_outputRequest.hasError)
+                {
+                    Finish(false);
+                    return;
+                }
+
+                Finish(true);
+            }
+
+            private void Finish(bool ok)
+            {
+                HasError = !ok;
+                Done = true;
+                // The GPU buffers go back to the pool; the job keeps what the file needs
+                _job.Dispose();
+                if (!ok) Dispose();
+            }
+        }
+
+        internal sealed class EncodeJob : IDisposable
         {
             public readonly int ChunkCount;
             public readonly Buffers Buffers;
@@ -217,7 +354,10 @@ namespace LTMX.QOI
             private readonly int _width, _height, _chunkPixels;
             private readonly QoiHeader _header;
 
-            public EncodeJob(Texture source, int chunkPixels, QoiChannels? channels, QoiSampleFormat? sampleFormat)
+            public QoiHeader Header => _header;
+
+            public EncodeJob(Texture source, int chunkPixels, QoiChannels? channels, QoiSampleFormat? sampleFormat,
+                QoiColorSpace? colorSpace = null)
             {
                 if (!IsSupported) throw new NotSupportedException("Compute shaders are not supported, use QoiTexture.EncodeToQOI instead.");
                 if (source == null) throw new ArgumentNullException(nameof(source));
@@ -225,11 +365,11 @@ namespace LTMX.QOI
 
                 _width = source.width;
                 _height = source.height;
-                var format = source.graphicsFormat;
-                var samples = sampleFormat ?? QoiTexture.GetSampleFormat(source);
-                var resolvedChannels = channels ?? (QoiTexture.IsSingleChannel(format) ? QoiChannels.R
+                GraphicsFormat format = source.graphicsFormat;
+                QoiSampleFormat samples = sampleFormat ?? QoiTexture.GetSampleFormat(source);
+                QoiChannels resolvedChannels = channels ?? (QoiTexture.IsSingleChannel(format) ? QoiChannels.R
                     : GraphicsFormatUtility.HasAlphaChannel(format) ? QoiChannels.Rgba : QoiChannels.Rgb);
-                _header = new QoiHeader(_width, _height, resolvedChannels, QoiTexture.GetColorSpace(source, samples), samples);
+                _header = new QoiHeader(_width, _height, resolvedChannels, colorSpace ?? QoiTexture.GetColorSpace(source, samples), samples);
 
                 int pixelCount = _width * _height;
                 if ((long)pixelCount * _header.BytesPerSample > QoiCodec.MaxPixels) throw new QoiException("Image too large to encode.");
@@ -240,14 +380,14 @@ namespace LTMX.QOI
                 bool isSRGB = GraphicsFormatUtility.IsSRGBFormat(format);
 
                 Buffers = Rent();
-                var sizes = Ensure(ref Buffers.Sizes, GraphicsBuffer.Target.Structured, ChunkCount);
-                var offsets = Ensure(ref Buffers.Offsets, GraphicsBuffer.Target.Structured, ChunkCount + 1);
+                GraphicsBuffer sizes = Ensure(ref Buffers.Sizes, GraphicsBuffer.Target.Structured, ChunkCount);
+                GraphicsBuffer offsets = Ensure(ref Buffers.Offsets, GraphicsBuffer.Target.Structured, ChunkCount + 1);
                 // Worst case: 5 bytes per pixel (QOI_OP_RGBA) plus one byte for the RGBA op starting each chunk
                 long worstBytes = (long)streamPixels * 5 + ChunkCount;
                 int worstWords = (int)((worstBytes + 3) / 4);
-                var output = Ensure(ref Buffers.Output, GraphicsBuffer.Target.Raw, worstWords);
+                GraphicsBuffer output = Ensure(ref Buffers.Output, GraphicsBuffer.Target.Raw, worstWords);
 
-                var cs = LoadedShader;
+                ComputeShader cs = LoadedShader;
                 SetFormat(cs, _header);
                 cs.SetInt(ChunkPixelsId, _chunkPixels);
                 cs.SetInt(ChunkCountId, ChunkCount);
@@ -282,19 +422,35 @@ namespace LTMX.QOI
                 cs.Dispatch(s_EncodeKernel, encodeGroups, 1, 1);
             }
 
+            private int TrailerSize => QoiCodec.PaddingSize + ChunkCount * 4 + 12 + QoiCodec.PaddingSize;
+
+            public int FileSize(uint[] offsets) => QoiCodec.HeaderSize + (int)offsets[ChunkCount] + TrailerSize;
+
             /// File with everything but the ops, which the caller copies at <see cref="QoiCodec.HeaderSize"/>
             public byte[] BuildFile(uint[] offsets)
             {
                 int opsSize = (int)offsets[ChunkCount];
-                var file = new byte[QoiCodec.HeaderSize + opsSize + QoiCodec.PaddingSize + ChunkCount * 4 + 12 + QoiCodec.PaddingSize];
-                var span = file.AsSpan();
+                var file = new byte[FileSize(offsets)];
+                Span<byte> span = file.AsSpan();
                 QoiCodec.WriteHeader(span, _header);
-
-                int p = QoiCodec.WritePadding(span, QoiCodec.HeaderSize + opsSize);
-                for (int c = 0; c < ChunkCount; c++, p += 4)
-                    BinaryPrimitives.WriteUInt32BigEndian(span.Slice(p), (uint)QoiCodec.HeaderSize + offsets[c]);
-                QoiCodec.WriteSeekFooter(span, p, _chunkPixels, ChunkCount);
+                WriteTrailer(span[(QoiCodec.HeaderSize + opsSize)..], offsets);
                 return file;
+            }
+
+            /// What follows the ops: end marker, chunk offsets and seek footer
+            public byte[] BuildTrailer(uint[] offsets)
+            {
+                var trailer = new byte[TrailerSize];
+                WriteTrailer(trailer, offsets);
+                return trailer;
+            }
+
+            private void WriteTrailer(Span<byte> span, uint[] offsets)
+            {
+                int p = QoiCodec.WritePadding(span, 0);
+                for (int c = 0; c < ChunkCount; c++, p += 4)
+                    BinaryPrimitives.WriteUInt32BigEndian(span[p..], QoiCodec.HeaderSize + offsets[c]);
+                QoiCodec.WriteSeekFooter(span, p, _chunkPixels, ChunkCount);
             }
 
             public void Dispose() => Return(Buffers);
@@ -310,10 +466,10 @@ namespace LTMX.QOI
         /// </summary>
         public static RenderTexture Decode(byte[] data, bool mipChain = false, bool? linear = null)
         {
-            var header = QoiCodec.ReadHeader(data);
+            QoiHeader header = QoiCodec.ReadHeader(data);
             // Gamma color space projects sample everything as is
             bool srgb = !(linear ?? header.ColorSpace == QoiColorSpace.Linear) && QualitySettings.activeColorSpace == ColorSpace.Linear;
-            var format = QoiTexture.GetGraphicsFormat(header, srgb);
+            GraphicsFormat format = QoiTexture.GetGraphicsFormat(header, srgb);
             srgb = GraphicsFormatUtility.IsSRGBFormat(format);
             var descriptor = new RenderTextureDescriptor(header.Width, header.Height, format, 0)
             {
@@ -348,7 +504,7 @@ namespace LTMX.QOI
             }
             else
             {
-                var cpu = QoiTexture.LoadQOI(data, false, !srgb, makeNoLongerReadable: true);
+                Texture2D cpu = QoiTexture.LoadQOI(data, false, !srgb, makeNoLongerReadable: true);
                 result = new RenderTexture(descriptor);
                 result.Create();
                 Graphics.Blit(cpu, result);
@@ -369,9 +525,9 @@ namespace LTMX.QOI
         /// </summary>
         public static bool TryDecodeInto(byte[] data, RenderTexture target)
         {
-            var header = QoiCodec.ReadHeader(data);
+            QoiHeader header = QoiCodec.ReadHeader(data);
             if (target == null) throw new ArgumentNullException(nameof(target));
-            var expected = QoiTexture.GetGraphicsFormat(header, false);
+            GraphicsFormat expected = QoiTexture.GetGraphicsFormat(header, false);
             if (target.width != header.Width || target.height != header.Height || !target.enableRandomWrite
                 || target.graphicsFormat != expected)
                 throw new ArgumentException($"The target must be an {expected} random write texture of the image size.", nameof(target));
@@ -391,8 +547,8 @@ namespace LTMX.QOI
         /// </summary>
         public static Texture2D DecodeToTexture2D(byte[] data, bool mipChain = false, bool? linear = null)
         {
-            var rt = Decode(data, mipChain, linear);
-            var flags = (mipChain ? TextureCreationFlags.MipChain : TextureCreationFlags.None) | TextureCreationFlags.DontInitializePixels;
+            RenderTexture rt = Decode(data, mipChain, linear);
+            TextureCreationFlags flags = (mipChain ? TextureCreationFlags.MipChain : TextureCreationFlags.None) | TextureCreationFlags.DontInitializePixels;
             var texture = new Texture2D(rt.width, rt.height, rt.graphicsFormat, flags);
             Graphics.CopyTexture(rt, texture);
             rt.Release();
@@ -402,16 +558,16 @@ namespace LTMX.QOI
 
         private static void Dispatch(byte[] data, in QoiHeader header, int chunkPixels, int[] offsets, RenderTexture target)
         {
-            var buffers = Rent();
+            Buffers buffers = Rent();
             try
             {
                 // Only the op stream is read by the shader, rounded to whole words within the file
-                int uploadBytes = Math.Min(data.Length & ~3, (offsets[offsets.Length - 1] + 3) & ~3);
+                int uploadBytes = Math.Min(data.Length & ~3, (offsets[^1] + 3) & ~3);
                 Upload(buffers, data, uploadBytes);
-                var table = Ensure(ref buffers.InputTable, GraphicsBuffer.Target.Structured, offsets.Length);
+                GraphicsBuffer table = Ensure(ref buffers.InputTable, GraphicsBuffer.Target.Structured, offsets.Length);
                 table.SetData(offsets);
 
-                var cs = LoadedShader;
+                ComputeShader cs = LoadedShader;
                 SetFormat(cs, header);
                 cs.SetInt(ChunkPixelsId, chunkPixels);
                 cs.SetInt(ChunkCountId, offsets.Length - 1);
@@ -428,7 +584,7 @@ namespace LTMX.QOI
                 {
                     // Byte planes are decoded by different threads: samples are assembled in a zeroed scratch buffer first
                     int words = header.PixelCount * (int)header.Channels;
-                    var scratch = Ensure(ref buffers.Output, GraphicsBuffer.Target.Raw, words);
+                    GraphicsBuffer scratch = Ensure(ref buffers.Output, GraphicsBuffer.Target.Raw, words);
                     int clearGroups = Mathf.Min((words + ClearThreads - 1) / ClearThreads, 4096);
                     cs.SetInt(ThreadCountId, clearGroups * ClearThreads);
                     cs.SetInt(ClearWordCountId, words);
@@ -481,8 +637,8 @@ namespace LTMX.QOI
             {
                 try
                 {
-                    var input = Ensure(ref buffers.Input, GraphicsBuffer.Target.Raw, bytes / 4, GraphicsBuffer.UsageFlags.LockBufferForWrite);
-                    var mapped = input.LockBufferForWrite<byte>(0, bytes);
+                    GraphicsBuffer input = Ensure(ref buffers.Input, GraphicsBuffer.Target.Raw, bytes / 4, GraphicsBuffer.UsageFlags.LockBufferForWrite);
+                    NativeArray<byte> mapped = input.LockBufferForWrite<byte>(0, bytes);
                     NativeArray<byte>.Copy(data, 0, mapped, 0, bytes);
                     input.UnlockBufferAfterWrite<byte>(bytes);
                     return;
