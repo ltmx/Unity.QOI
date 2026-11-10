@@ -1,5 +1,5 @@
 ![Unity.QOI Logo](https://github.com/LTMX/Unity.QOI/blob/main/.branding/LTMX_Unity_QOI_Github_Banner_Thin.png)
- 
+
 ## QOI Image Format Importer & Exporter for Unity
 ![GitHub repo size](https://img.shields.io/github/repo-size/LTMX/Unity.QOI?style=for-the-badge)
 ![GitHub package.json version](https://img.shields.io/github/package-json/v/LTMX/Unity.QOI?style=for-the-badge&color=blueviolet)
@@ -14,142 +14,135 @@
 <br>
 -->
 
+Fast [QOI](https://qoiformat.org) import / export for Unity, on the CPU or the GPU.
+
 ## Features
+- **No dependencies**, runtime and editor
+- Bit exact with the reference [qoi.h](https://github.com/phoboslab/qoi)
+- **GPU encoder / decoder** (compute shaders), up to 16× faster than the CPU
+- **Seekable QOI**: still readable by any QOI decoder, decodes on all cores or on the GPU
+- **HDR (half / float) and single channel** extensions, lossless
+- Importer: sRGB / linear, mipmaps, max size, NPOT scaling, DXT / BC4 / BC6H / BC7 / Crunch, sprites, **cubemaps**
+- Exporter: any `Texture2D` (non readable and compressed included) to QOI / PNG / JPG
 
-- **No dependencies**: a single self contained codec, nothing to install besides this package
-- Imports `.qoi` files as textures (RGB & RGBA, sRGB / linear, mipmaps, max size, DXT / BC7 / Crunch compression, sprites)
-- Exports any `Texture2D` to QOI / PNG / JPG / EXR / TGA, even non readable and compressed ones
-- **HDR (half & float) and single channel QOI** extensions: lossless, CPU & GPU, imported as RHalf / RGBAHalf / RFloat / RGBAFloat / R8
-- Bit exact with the reference [qoi.h](https://github.com/phoboslab/qoi) encoder
-- Runtime API (works in builds, not only in the editor)
-- **Seekable QOI**: optional, 100% spec compliant variant that decodes on all CPU cores or on the GPU
-- **Compute shader encoder / decoder** (`QoiGpu`)
+## Installation
+Unity **2022.3+**. In `Window > Package Manager`, click `+ > Add package from git URL...` and paste:
+```
+https://github.com/LTMX/Unity.QOI.git
+```
+Or unzip a [release](https://github.com/LTMX/Unity.QOI/releases) into `Packages/com.ltmx.unity.qoi/`.
 
+## Quick start
 ```csharp
 using LTMX.QOI;
 
-byte[] qoi = anyTexture.EncodeToQOI();              // any Texture, readable or not (HDR / single channel picked from its format)
-byte[] hdr = anyTexture.EncodeToQOI(sampleFormat: QoiSampleFormat.Half, channels: QoiChannels.Rgb); // or forced
-Texture2D tex = QoiTexture.LoadQOI(qoi);             // CPU decode + upload
-existingTexture2D.LoadQOI(qoi);                      // like ImageConversion.LoadImage
+byte[] qoi = texture.EncodeToQOI();                   // CPU, any Texture
+Texture2D tex = QoiTexture.LoadQOI(qoi);              // CPU decode
 
-byte[] seekable = QoiGpu.Encode(renderTexture);      // GPU encode, only the compressed bytes are read back
-QoiGpu.EncodeAsync(renderTexture, bytes => ...);     // same, without stalling the main thread
-RenderTexture gpuTex = QoiGpu.Decode(seekable);      // GPU decode, pixels never touch the CPU
-QoiGpu.TryDecodeInto(seekable, existingUNormRT);     // same into a reused render texture: no allocation, fastest
-Texture2D gpuTex2D = QoiGpu.DecodeToTexture2D(seekable); // same, as a Texture2D (slower: Unity allocates a CPU copy)
-QoiGpu.ReleaseResources();                           // frees the pooled GPU buffers
-
-QoiImage img = QoiCodec.Decode(bytes, outputChannels: 4, flipY: true); // raw codec, no UnityEngine needed
-byte[] file = QoiCodec.Encode(rgba, width, height, 4, QoiChannels.Rgba, seekChunkPixels: QoiCodec.DefaultChunkPixels);
-byte[] halfFile = QoiCodec.Encode(halfBits /* ushort[] */, width, height, 4, QoiChannels.Rgba); // float[] works too
-Span<ushort> halfs = QoiCodec.Decode(halfFile).AsHalfs();                 // AsFloats() for float files
-
-anyTexture2D.SaveToFile(TextureEncodingFormat.QOI);  // editor: opens a native save panel
+byte[] seekable = QoiGpu.Encode(texture);             // GPU encode
+RenderTexture rt = QoiGpu.Decode(seekable);           // GPU decode, pixels never touch the CPU
 ```
 
-Run `Tools > QOI > Run Self-Test` to check the CPU and GPU codecs against each other and benchmark them on your machine.
+<details>
+<summary>Full API</summary>
 
-### Seekable QOI
-QOI is sequential: every pixel depends on the previous one and on a 64 entry color table, which prevents parallel decoding.
-A seekable file splits the image into chunks of N pixels (4096 by default). Each chunk starts with a `QOI_OP_RGBA`,
-never continues a run from the previous chunk and never references a table entry written before it.
-The op stream stays a perfectly standard QOI stream, so **any QOI decoder reads these files**,
-but each chunk can also be decoded on its own. A small trailer stored after the end marker lists the byte offset of every chunk:
+```csharp
+// Textures (CPU)
+byte[] hdr = texture.EncodeToQOI(sampleFormat: QoiSampleFormat.Half, channels: QoiChannels.Rgb); // force a format
+existingTexture2D.LoadQOI(qoi);                        // like ImageConversion.LoadImage
+
+// GPU encode
+QoiGpu.EncodeAsync(texture, bytes => ...);             // callback a few frames later (needs the player loop)
+using var request = QoiGpu.RequestEncode(texture);     // poll it yourself: editor loops, batch mode
+request.WaitForCompletion();                           // or request.Update() until request.Done
+request.WriteTo(fileStream);                           // no managed array
+
+// GPU decode (non seekable files fall back to the CPU)
+QoiGpu.TryDecodeInto(seekable, existingUNormRT);       // reused render texture: fastest
+Texture2D tex2D = QoiGpu.DecodeToTexture2D(seekable);  // slower: Unity allocates a CPU copy
+QoiGpu.ReleaseResources();                             // frees the pooled GPU buffers
+
+// Raw codec (no UnityEngine)
+QoiImage img = QoiCodec.Decode(bytes, outputChannels: 4, flipY: true);
+byte[] file = QoiCodec.Encode(rgba, width, height, 4, QoiChannels.Rgba, seekChunkPixels: QoiCodec.DefaultChunkPixels);
+byte[] halfFile = QoiCodec.Encode(halfBits /* ushort[] or float[] */, width, height, 4, QoiChannels.Rgba);
+Span<ushort> halfs = QoiCodec.Decode(halfFile).AsHalfs(); // AsFloats() for float files
+bool isSeekable = QoiCodec.IsSeekable(bytes);
+
+// Editor
+texture2D.SaveToFile(TextureEncodingFormat.QOI);       // native save panel
+```
+</details>
+
+## Editor
+- **Import**: drop `.qoi` files in the project. Cubemaps: set *Texture Shape* to *Cube*. The layout is detected from the
+  image ratio (2:1 lat-long, 6:1 / 1:6 strip in +X −X +Y −Y +Z −Z order), or you can pick it.
+- **Export**: right click a texture > `Export to...`, or `Window > QOI Export Window` (CPU / GPU encoder, sample format, channels).
+- **Self-test**: `Tools > QOI > Run Self-Test` checks CPU and GPU byte for byte and benchmarks your machine.
+
+<img width="300" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png"> <img height="128" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/QOI%20Context%20Menu.png">
+
+## Performance
+RTX 4070 (D3D12), Xeon W-2135 (6c / 12t), Unity 7000.0, Release code optimization. GPU times include upload / readback.
+Green rows: the GPU is faster, red rows: the CPU is faster.
+
+**Encode**
+
+<img src=".documentation/benchmark-encode.svg" alt="Encode timings: the GPU is faster from 1024x1024 up (6.3 vs 14.1 ms), up to 15.7x on a 2048x2048 HDR texture; the CPU is faster at 512x512">
+
+**Decode** (GPU compared with the parallel CPU decode)
+
+<img src=".documentation/benchmark-decode.svg" alt="Decode timings: the GPU is faster from 1024x1024 up, up to 14.9x faster than a single CPU thread on a 4096x4096 gradient; the CPU is faster at 512x512">
+
+Editor scripts default to Debug code optimization, which makes the CPU codec ~3× slower. Switch to Release in the status bar for faster imports.
+
+## Format
+
+| File | Other QOI decoders | This package |
+|---|---|---|
+| 8 bit RGB / RGBA | ✅ | ✅ |
+| Seekable | ✅ | ✅ multithreaded / GPU |
+| Single channel, HDR | ❌ rejected cleanly | ✅ |
+
+<details>
+<summary>Seekable QOI</summary>
+
+The image is split into chunks of N pixels (4096 on the CPU, 1024 for GPU encodes). Each chunk starts with a
+`QOI_OP_RGBA`, never continues a run and never references a color table entry written before it, so it decodes on its own
+while the stream stays standard QOI. A trailer after the end marker lists the chunk offsets (≈0.1–0.4% overhead):
 
 ```
 header | ops | end marker | u32 offsets[chunkCount] | u32 chunkPixels | u32 chunkCount | "qsek" | end marker
 ```
+</details>
 
-The size overhead is about 9 bytes per chunk (≈0.1% on typical images).
-The importer decodes seekable files on all cores, `QoiGpu` decodes them with one GPU thread per chunk.
+<details>
+<summary>HDR and single channel</summary>
 
-### HDR and single channel extensions
-Standard QOI only stores 8 bit RGB / RGBA. This package extends it, keeping the same ops and the 14 byte header:
+- Header channel byte: `channelCount | sampleFormat << 4`, channel count 1, 3 or 4, sample format 0 (8 bit), 1 (half), 2 (float).
+- **Single channel**: index and run ops, `0x40 | (d + 32)` for a difference in [-32, 31], `0xFE v` for a literal.
+- **HDR**: raw half / float bits (lossless, NaN included) split into byte planes, most significant first, encoded
+  like an 8 bit image 2 or 4 times taller. Every op, seekable chunks and GPU decoding work unchanged.
+- Formats are picked from the texture (R8 / RHalf / RFloat… → R, half / BC6H → half, float / 16 bit → float).
+</details>
 
-- The header channel byte becomes `channelCount | sampleFormat << 4`: channel count 1 (R), 3 or 4, sample format
-  0 (8 bit), 1 (half) or 2 (float). Standard files are unchanged, extended files are cleanly rejected by other QOI decoders.
-- **Single channel**: same index and run ops, `0x40 | (d + 32)` stores a difference in [-32, 31] in one byte,
-  `0xFE v` a literal. 1 to 2 bytes per pixel at most, instead of up to 4 bytes when stored as gray RGB.
-- **HDR**: half and float samples are stored as raw bits (lossless, negative / huge values / NaN kept) split into byte
-  planes, most significant first. The op stream encodes plane 0 of every pixel, then plane 1, ... like an 8 bit image
-  2 or 4 times taller, so every QOI op, seekable chunks, multithreaded and GPU decoding work as is.
-  The high planes (sign, exponent) compress very well, the low mantissa bytes less so.
-- Textures: `EncodeToQOI` / `QoiGpu.Encode` pick the format from the texture (R8 / R16 / RHalf / RFloat... → R,
-  half / BC6H → half, float and 16 bit normalized → float). Decoding gives R8_UNorm, R16 / R16G16B16A16 SFloat or
-  R32 / R32G32B32A32 SFloat textures (RGB HDR files become RGBA). The importer compresses HDR RGB to BC6H and
-  8 bit single channel to BC4.
+<details>
+<summary>GPU codec</summary>
 
-### Compute shader codec
-- **Encode**: a first pass with one thread per chunk only measures the size of every chunk, a prefix sum turns the
-  sizes into byte offsets, then a second pass writes every chunk straight at its final (unaligned) offset. Encoding
-  twice is cheaper than compacting scratch copies, and the ops are read back directly into the returned file.
-  Works on any GPU texture (render textures, compressed, HDR...) and its output is byte identical to the CPU seekable encoder.
-- **Decode**: one thread per chunk replays the ops (reading 32 bit words, not bytes) and writes into a random write
-  render texture, raw-copied into an sRGB one when needed. No pixel data goes through the CPU, and the upload
-  writes the op stream straight into GPU visible memory.
-- GPU buffers are pooled (guarded by GPU fences) so repeated calls don't reallocate. Files encoded on the GPU use
-  1024 pixel chunks: more GPU threads when decoding, for ~0.4% size.
-- 4096x4096 on an RTX 4070, including upload / readback and waiting for the GPU: GPU encode ~14 ms (CPU ~190 ms),
-  GPU decode ~16 ms, ~11 ms into a reused render texture (CPU parallel ~35 ms, single thread ~190 ms).
-- Plain (non seekable) files and machines without compute shaders fall back to the CPU codec.
-
-<table>
-    <tr>
-      <td>
-        <a href="selftitled.html">
-          <div class="imgWrap floatleft">
-            <h3>Context Menu Action</h3>
-            <img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/QOI%20Context%20Menu.png" height="128">
-          </div>
-        </a>
-      </td>
-      <td>
-        <a href="12x5.html">
-          <div class="imgWrap floatleft">
-            <h3>Output Folder</h3>
-            <img src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/Qoi%20Output%20Folder.png" height="128">
-          </div>
-        </a>
-      </td>
-    </tr>
-  </table>
-
-
-### Importer Inspector Parameters
-Most settings have been mapped from how unity imports other image formats, to ensure behaviour compatibility
-
-<img width="300" src="https://raw.githubusercontent.com/LTMX/Unity.QOI/main/.documentation/LTMX%20Unity%20Qoi%20Importer%20Editor%20Inspector.png">
-
-
-<!--
-### Editor Window
-
-<img height="170" src=".documentation/Qoi%20Editor%20Window.png">
-<img height="170" src=".documentation/Find%20Qoi%20Editor%20Window.png">
--->
-    
-## Installation
-### UNITY PACKAGE MANAGER (recommended)
-1. Copy this URL: ``https://github.com/LTMX/Unity.QOI.git``
-2. In Unity menu bar, go to ``Window > Package Manager`` [Help](https://docs.unity3d.com/Manual/Packages.html)
-3. In Unity Package Manager, click ``(+ button) > Add package from Git URL...`` (info / troubleshooting Git URL packages in Unity)
-4. Paste URL from step 1 into the URL box and click ``Add``
-5. Unity.QOI will now automatically update from GitHub
-### Zip Package From Releases
-- Or manually download the latest .ZIP from [Releases](https://https://github.com/LTMX/Unity.QOI/releases)
-    and unzip to `/<your project folder>/Packages/com.ltmx.unity.qoi/`
-
+- **Encode**: pass 1 measures every chunk (one thread per chunk), a prefix sum gives the offsets, pass 2 writes every
+  chunk at its final offset. Output is byte identical to the CPU seekable encoder.
+- **Decode**: one thread per chunk writes into a random write render texture (raw-copied to sRGB when needed).
+- GPU buffers are pooled. Non seekable files and machines without compute shaders use the CPU codec.
+</details>
 
 ## Contribute
-- please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
-- [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged !
+- Please post bug reports or (small) feature requests as an [Issue](https://github.com/LTMX/Unity.QOI/issues)
+- [Pull Requests](https://github.com/LTMX/Unity.QOI/pulls) are welcome and encouraged!
 
 ## Credits
 - [QOI Image Format](https://github.com/phoboslab/qoi)
 - Earlier versions used [qoi.csharp](https://github.com/kroppt/qoi.csharp) and [QoiSharp](https://github.com/alanmcgovern/QoiSharp), since replaced by a built-in codec
+- <a href="https://github.com/Ben1138/unity-qoi">Importer from Ben1138</a>, though modified a lot
 
-- <a href="https://github.com/Ben1138/unity-qoi">Importer from Ben1138, though modified a lot</a>
-
-## LICENSE
-<p>This project is licensed under the MIT License (<a href="LICENSE">License</a>)</p>
+## License
+This project is licensed under the MIT License ([License](LICENSE))
