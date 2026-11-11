@@ -12,6 +12,8 @@ namespace LTMX.QOI.Editor
     public class QoiImporterEditor : ScriptedImporterEditor
     {
         SerializedProperty _textureType;
+        SerializedProperty _textureShape;
+        SerializedProperty _cubemapLayout;
         SerializedProperty _alphaIsTransparency;
         SerializedProperty _mipMapEnabled;
         SerializedProperty _npotScale;
@@ -31,6 +33,8 @@ namespace LTMX.QOI.Editor
         {
             base.OnEnable();
             _textureType = Find("textureType");
+            _textureShape = Find("textureShape");
+            _cubemapLayout = Find("cubemapLayout");
             _alphaIsTransparency = Find("alphaIsTransparency");
             _mipMapEnabled = Find("mipMapEnabled");
             _npotScale = Find("npotScale");
@@ -51,6 +55,21 @@ namespace LTMX.QOI.Editor
             serializedObject.Update();
 
             PropertyField(_textureType, new GUIContent("Texture Type"));
+
+            // Only 2D and Cube are supported
+            bool isCube = _textureShape.intValue == (int)TextureImporterShape.TextureCube;
+            EditorGUI.BeginChangeCheck();
+            int shape = Popup("Texture Shape", isCube ? 1 : 0, new[] { "2D", "Cube" });
+            if (EditorGUI.EndChangeCheck())
+                _textureShape.intValue = (int)(shape == 1 ? TextureImporterShape.TextureCube : TextureImporterShape.Texture2D);
+            if (shape == 1)
+            {
+                EditorGUI.indentLevel++;
+                PropertyField(_cubemapLayout, new GUIContent("Mapping",
+                    "Auto: 2:1 = latitude-longitude (Skybox/Panoramic convention), 6:1 / 1:6 = face strip (+X -X +Y -Y +Z -Z)"));
+                EditorGUI.indentLevel--;
+            }
+
             PropertyField(_alphaIsTransparency, new GUIContent("Alpha is Transparency"));
             PropertyField(_mipMapEnabled, new GUIContent("Enable MipMaps"));
             using (new EditorGUI.DisabledScope(_textureType.enumValueFlag == (int)TextureImporterType.Sprite))
