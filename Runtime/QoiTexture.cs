@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -23,10 +24,32 @@ namespace LTMX.QOI
         {
             var format = sampleFormat ?? GetSampleFormat(texture);
             var colorSpace = GetColorSpace(texture, format);
-            byte[] pixels = format == QoiSampleFormat.Byte ? ReadPixels32(texture, out _) : ReadPixelsHdr(texture, format);
+            // Readable textures already in the right layout are encoded from their own memory, without a copy
+            ReadOnlySpan<byte> pixels = TryGetRawPixels(texture, format, out var raw) ? raw.AsReadOnlySpan()
+                : format == QoiSampleFormat.Byte ? ReadPixels32(texture, out _) : ReadPixelsHdr(texture, format);
             var resolved = channels ?? (IsSingleChannel(texture.graphicsFormat) ? QoiChannels.R
                 : HasTransparency(pixels, format) ? QoiChannels.Rgba : QoiChannels.Rgb);
             return QoiCodec.Encode(pixels, texture.width, texture.height, 4, resolved, colorSpace, flipY: true, seekChunkPixels, format);
+        }
+
+        /// <summary>
+        /// Mip 0 of a readable <see cref="Texture2D"/> stored as 4 channels of <paramref name="format"/> samples (RGBA32,
+        /// RGBAHalf, RGBAFloat): a view on the texture memory, owned by the texture.
+        /// </summary>
+        private static bool TryGetRawPixels(Texture texture, QoiSampleFormat format, out NativeArray<byte> pixels)
+        {
+            pixels = default;
+            if (texture is not Texture2D t2d || !t2d.isReadable) return false;
+            var f = t2d.graphicsFormat;
+            bool match = format switch
+            {
+                QoiSampleFormat.Byte => f is GraphicsFormat.R8G8B8A8_UNorm or GraphicsFormat.R8G8B8A8_SRGB,
+                QoiSampleFormat.Half => f == GraphicsFormat.R16G16B16A16_SFloat,
+                _ => f == GraphicsFormat.R32G32B32A32_SFloat
+            };
+            if (!match) return false;
+            pixels = t2d.GetPixelData<byte>(0);
+            return true;
         }
 
         /// <summary>
@@ -138,17 +161,10 @@ namespace LTMX.QOI
 
             if (texture is Texture2D t2d && t2d.isReadable)
             {
-                var colors = t2d.GetPixels32(0);
-                var bytes = new byte[colors.Length * 4];
-                for (int i = 0, o = 0; i < colors.Length; i++, o += 4)
-                {
-                    var c = colors[i];
-                    bytes[o] = c.r;
-                    bytes[o + 1] = c.g;
-                    bytes[o + 2] = c.b;
-                    bytes[o + 3] = c.a;
-                }
-                return bytes;
+                if (TryGetRawPixels(t2d, QoiSampleFormat.Byte, out var raw))
+                    return raw.ToArray();
+                // Color32 is laid out as r, g, b, a bytes
+                return MemoryMarshal.AsBytes(t2d.GetPixels32(0).AsSpan()).ToArray();
             }
 
             // Blitting into a render target with the same color space keeps the stored values unchanged
@@ -184,6 +200,9 @@ namespace LTMX.QOI
 
             if (texture is Texture2D t2d && t2d.isReadable)
             {
+                if (TryGetRawPixels(t2d, format, out var raw))
+                    return raw.ToArray();
+
                 var colors = t2d.GetPixels(0);
                 var bytes = new byte[count * QoiCodec.BytesPerSample(format)];
                 if (format == QoiSampleFormat.Float)

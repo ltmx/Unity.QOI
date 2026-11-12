@@ -6,9 +6,11 @@
   },
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
-  "description": "Import and Export to the QOI Image Format, with HDR (half / float) and single channel extensions. Dependency free, with multithreaded and compute shader (GPU) encoding / decoding.",
+  "description": "Import and Export to the QOI Image Format, with HDR (half / float) and single channel extensions. Burst compiled, with multithreaded and compute shader (GPU) encoding / decoding.",
   "version": "3.1.0",
   "dependencies": {
+    "com.unity.burst": "1.8.12",
+    "com.unity.mathematics": "1.2.6",
     "com.unity.modules.imageconversion": "1.0.0",
     "com.unity.modules.imgui": "1.0.0"
   },
@@ -22,7 +24,8 @@
     "ltmx",
     "importer",
     "compute shader",
-    "gpu"
+    "gpu",
+    "burst"
   ],
   "license": "MIT",
   "unity": "2022.3"

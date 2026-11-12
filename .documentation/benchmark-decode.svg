@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="715" height="306" viewBox="0 0 715 306">
+<svg xmlns="http://www.w3.org/2000/svg" width="926" height="306" viewBox="0 0 926 306">
 <style>
   text { font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; fill: #1f2328; }
   .head { font-weight: 600; }
@@ -15,79 +15,88 @@
     .line, .frame { stroke: #3d444d; }
   }
 </style>
-<clipPath id="round"><rect width="715" height="306" rx="6"/></clipPath>
+<clipPath id="round"><rect width="926" height="306" rx="6"/></clipPath>
 <g clip-path="url(#round)">
-<rect class="head-row" x="0" y="0" width="715" height="34"/>
+<rect class="head-row" x="0" y="0" width="926" height="34"/>
 <text class="head" x="14" y="22" text-anchor="start">Image</text>
 <text class="head" x="171" y="22" text-anchor="start">Resolution</text>
 <text class="head" x="366" y="22" text-anchor="end">CPU 1 thread</text>
 <text class="head" x="486" y="22" text-anchor="end">CPU parallel</text>
-<text class="head" x="567" y="22" text-anchor="end">GPU</text>
-<text class="head" x="701" y="22" text-anchor="end">GPU, reused RT</text>
-<rect class="slower" x="0" y="34" width="715" height="34"/>
-<line class="line" x1="0" y1="34.5" x2="715" y2="34.5"/>
+<text class="head" x="696" y="22" text-anchor="end">CPU parallel, plain file</text>
+<text class="head" x="777" y="22" text-anchor="end">GPU</text>
+<text class="head" x="912" y="22" text-anchor="end">GPU, reused RT</text>
+<rect class="slower" x="0" y="34" width="926" height="34"/>
+<line class="line" x1="0" y1="34.5" x2="926" y2="34.5"/>
 <text x="14" y="56" text-anchor="start">Albedo</text>
 <text x="171" y="56" text-anchor="start">512²</text>
-<text x="366" y="56" text-anchor="end">5.4 ms</text>
-<text x="486" y="56" text-anchor="end">3.2 ms</text>
-<text x="567" y="56" text-anchor="end">5.4 ms</text>
-<text x="701" y="56" text-anchor="end">4.4 ms</text>
-<rect class="faster" x="0" y="68" width="715" height="34"/>
-<line class="line" x1="0" y1="68.5" x2="715" y2="68.5"/>
+<text x="366" y="56" text-anchor="end">3.6 ms</text>
+<text x="486" y="56" text-anchor="end">1.0 ms</text>
+<text x="696" y="56" text-anchor="end">2.5 ms</text>
+<text x="777" y="56" text-anchor="end">11.2 ms</text>
+<text x="912" y="56" text-anchor="end">9.6 ms</text>
+<rect class="slower" x="0" y="68" width="926" height="34"/>
+<line class="line" x1="0" y1="68.5" x2="926" y2="68.5"/>
 <text x="14" y="90" text-anchor="start">Albedo</text>
 <text x="171" y="90" text-anchor="start">1024²</text>
-<text x="366" y="90" text-anchor="end">15.4 ms</text>
-<text x="486" y="90" text-anchor="end">7.8 ms</text>
-<text x="567" y="90" text-anchor="end">5.1 ms</text>
-<text x="701" y="90" text-anchor="end">4.9 ms</text>
-<rect class="faster" x="0" y="102" width="715" height="34"/>
-<line class="line" x1="0" y1="102.5" x2="715" y2="102.5"/>
+<text x="366" y="90" text-anchor="end">14.9 ms</text>
+<text x="486" y="90" text-anchor="end">3.3 ms</text>
+<text x="696" y="90" text-anchor="end">9.0 ms</text>
+<text x="777" y="90" text-anchor="end">10.7 ms</text>
+<text x="912" y="90" text-anchor="end">9.1 ms</text>
+<rect class="slower" x="0" y="102" width="926" height="34"/>
+<line class="line" x1="0" y1="102.5" x2="926" y2="102.5"/>
 <text x="14" y="124" text-anchor="start">Albedo</text>
 <text x="171" y="124" text-anchor="start">2048²</text>
-<text x="366" y="124" text-anchor="end">48.8 ms</text>
-<text x="486" y="124" text-anchor="end">23.8 ms</text>
-<text x="567" y="124" text-anchor="end">8.8 ms</text>
-<text x="701" y="124" text-anchor="end">8.4 ms</text>
-<rect class="faster" x="0" y="136" width="715" height="34"/>
-<line class="line" x1="0" y1="136.5" x2="715" y2="136.5"/>
+<text x="366" y="124" text-anchor="end">62.9 ms</text>
+<text x="486" y="124" text-anchor="end">9.5 ms</text>
+<text x="696" y="124" text-anchor="end">34.6 ms</text>
+<text x="777" y="124" text-anchor="end">18.7 ms</text>
+<text x="912" y="124" text-anchor="end">16.7 ms</text>
+<rect class="faster" x="0" y="136" width="926" height="34"/>
+<line class="line" x1="0" y1="136.5" x2="926" y2="136.5"/>
 <text x="14" y="158" text-anchor="start">Albedo</text>
 <text x="171" y="158" text-anchor="start">4096²</text>
-<text x="366" y="158" text-anchor="end">206.7 ms</text>
-<text x="486" y="158" text-anchor="end">82.1 ms</text>
-<text x="567" y="158" text-anchor="end">20.8 ms</text>
-<text x="701" y="158" text-anchor="end">19.4 ms</text>
-<rect class="faster" x="0" y="170" width="715" height="34"/>
-<line class="line" x1="0" y1="170.5" x2="715" y2="170.5"/>
+<text x="366" y="158" text-anchor="end">260.9 ms</text>
+<text x="486" y="158" text-anchor="end">49.9 ms</text>
+<text x="696" y="158" text-anchor="end">128.5 ms</text>
+<text x="777" y="158" text-anchor="end">42.5 ms</text>
+<text x="912" y="158" text-anchor="end">17.9 ms</text>
+<rect class="faster" x="0" y="170" width="926" height="34"/>
+<line class="line" x1="0" y1="170.5" x2="926" y2="170.5"/>
 <text x="14" y="192" text-anchor="start">Normal map</text>
 <text x="171" y="192" text-anchor="start">2048²</text>
-<text x="366" y="192" text-anchor="end">56.2 ms</text>
-<text x="486" y="192" text-anchor="end">28.7 ms</text>
-<text x="567" y="192" text-anchor="end">13.7 ms</text>
-<text x="701" y="192" text-anchor="end">7.3 ms</text>
-<rect class="faster" x="0" y="204" width="715" height="34"/>
-<line class="line" x1="0" y1="204.5" x2="715" y2="204.5"/>
+<text x="366" y="192" text-anchor="end">29.5 ms</text>
+<text x="486" y="192" text-anchor="end">4.8 ms</text>
+<text x="696" y="192" text-anchor="end">29.7 ms</text>
+<text x="777" y="192" text-anchor="end">4.7 ms</text>
+<text x="912" y="192" text-anchor="end">4.0 ms</text>
+<rect class="slower" x="0" y="204" width="926" height="34"/>
+<line class="line" x1="0" y1="204.5" x2="926" y2="204.5"/>
 <text x="14" y="226" text-anchor="start">Mask</text>
 <text x="171" y="226" text-anchor="start">2048²</text>
-<text x="366" y="226" text-anchor="end">50.0 ms</text>
-<text x="486" y="226" text-anchor="end">29.0 ms</text>
-<text x="567" y="226" text-anchor="end">7.3 ms</text>
-<text x="701" y="226" text-anchor="end">5.5 ms</text>
-<rect class="faster" x="0" y="238" width="715" height="34"/>
-<line class="line" x1="0" y1="238.5" x2="715" y2="238.5"/>
+<text x="366" y="226" text-anchor="end">40.8 ms</text>
+<text x="486" y="226" text-anchor="end">6.8 ms</text>
+<text x="696" y="226" text-anchor="end">22.2 ms</text>
+<text x="777" y="226" text-anchor="end">15.5 ms</text>
+<text x="912" y="226" text-anchor="end">14.2 ms</text>
+<rect class="slower" x="0" y="238" width="926" height="34"/>
+<line class="line" x1="0" y1="238.5" x2="926" y2="238.5"/>
 <text x="14" y="260" text-anchor="start">Smooth gradient</text>
 <text x="171" y="260" text-anchor="start">4096²</text>
-<text x="366" y="260" text-anchor="end">214.5 ms</text>
-<text x="486" y="260" text-anchor="end">89.6 ms</text>
-<text x="567" y="260" text-anchor="end">14.4 ms</text>
-<text x="701" y="260" text-anchor="end">12.4 ms</text>
-<rect class="faster" x="0" y="272" width="715" height="34"/>
-<line class="line" x1="0" y1="272.5" x2="715" y2="272.5"/>
+<text x="366" y="260" text-anchor="end">65.7 ms</text>
+<text x="486" y="260" text-anchor="end">23.0 ms</text>
+<text x="696" y="260" text-anchor="end">35.0 ms</text>
+<text x="777" y="260" text-anchor="end">25.1 ms</text>
+<text x="912" y="260" text-anchor="end">11.0 ms</text>
+<rect class="faster" x="0" y="272" width="926" height="34"/>
+<line class="line" x1="0" y1="272.5" x2="926" y2="272.5"/>
 <text x="14" y="294" text-anchor="start">HDR albedo (half)</text>
 <text x="171" y="294" text-anchor="start">2048²</text>
-<text x="366" y="294" text-anchor="end">109.5 ms</text>
-<text x="486" y="294" text-anchor="end">55.3 ms</text>
-<text x="567" y="294" text-anchor="end">20.2 ms</text>
-<text x="701" y="294" text-anchor="end">–</text>
+<text x="366" y="294" text-anchor="end">145.1 ms</text>
+<text x="486" y="294" text-anchor="end">25.2 ms</text>
+<text x="696" y="294" text-anchor="end">155.7 ms</text>
+<text x="777" y="294" text-anchor="end">13.1 ms</text>
+<text x="912" y="294" text-anchor="end">10.6 ms</text>
 </g>
-<rect class="frame" x="0.5" y="0.5" width="714" height="305" rx="6"/>
+<rect class="frame" x="0.5" y="0.5" width="925" height="305" rx="6"/>
 </svg>

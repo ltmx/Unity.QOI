@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 namespace LTMX.QOI
 {
     /// <summary>
-    /// Dependency free QOI encoder / decoder (https://qoiformat.org/qoi-specification.pdf).
+    /// QOI encoder / decoder (https://qoiformat.org/qoi-specification.pdf).
     /// <para>
     /// Pixels are packed as <c>r | g &lt;&lt; 8 | b &lt;&lt; 16 | a &lt;&lt; 24</c> internally.
     /// <c>flipY</c> converts between QOI row order (top to bottom) and Unity row order (bottom to top).
@@ -35,6 +35,9 @@ namespace LTMX.QOI
     /// an 8 bit image <c>bytesPerSample</c> times taller. Seekable chunks and their pixel counts refer to this stream.
     /// The alpha byte of RGB streams is always 255.</item>
     /// </list>
+    /// </para>
+    /// <para>
+    /// The encode / decode loops are Burst compiled (<see cref="QoiBurst"/>).
     /// </para>
     /// </summary>
     public static class QoiCodec
@@ -202,155 +205,25 @@ namespace LTMX.QOI
             WriteHeader(output, new QoiHeader(width, height, channels, colorSpace, sampleFormat));
 
             int streamPixels = width * height * bytesPerSample;
-            int lastPixel = streamPixels - 1;
             int chunkCount = seekChunkPixels > 0 ? (streamPixels + seekChunkPixels - 1) / seekChunkPixels : 0;
             int[] chunkOffsets = chunkCount > 0 ? new int[chunkCount] : null;
-            int nextChunkStart = chunkCount > 1 ? seekChunkPixels : int.MaxValue;
-            int chunk = 1;
-            if (chunkOffsets != null) chunkOffsets[0] = HeaderSize;
-
-            Span<uint> index = stackalloc uint[64];
-            // Bit set of index entries the decoder is guaranteed to share with us. A plain QOI decoder starts with a
-            // zeroed index, so every entry is valid. A seekable chunk only trusts entries written inside the chunk.
-            ulong valid = ulong.MaxValue;
-            bool single = channels == QoiChannels.R;
-            bool readAlpha = channels == QoiChannels.Rgba && sourceChannels == 4;
-            int stride = sourceChannels * bytesPerSample;
-            int gOffset = sourceChannels == 1 ? 0 : bytesPerSample;
-            int bOffset = sourceChannels == 1 ? 0 : 2 * bytesPerSample;
-            int aOffset = 3 * bytesPerSample;
-            uint one = OneBits(sampleFormat);
-            uint prev = OpaqueBlack;
-            int run = 0;
-            int p = HeaderSize;
-            int i = 0;
-
-            for (int plane = 0; plane < bytesPerSample; plane++)
+            var args = new QoiBurst.EncodeArgs
             {
-                // Most significant byte first, samples are little endian
-                int byteInSample = bytesPerSample - 1 - plane;
-                // Alpha byte when the source has none: opaque in RGBA files, 255 in RGB streams
-                uint alpha = (channels == QoiChannels.Rgba ? one >> (byteInSample * 8) & 0xFF : 255u) << 24;
+                Width = width, Height = height, SourceChannels = sourceChannels, BytesPerSample = bytesPerSample,
+                SeekChunkPixels = seekChunkPixels, ChunkCount = chunkCount, Channels = channels, SampleFormat = sampleFormat,
+                FlipY = (byte)(flipY ? 1 : 0)
+            };
 
-                for (int y = 0; y < height; y++)
+            int p;
+            unsafe
+            {
+                fixed (byte* src = pixels)
+                fixed (byte* dst = output)
+                fixed (int* offsets = chunkOffsets)
                 {
-                    int s = (flipY ? height - 1 - y : y) * width * stride + byteInSample;
-                    for (int x = 0; x < width; x++, i++, s += stride)
-                    {
-                        uint px = single
-                            ? pixels[s] | OpaqueBlack
-                            : pixels[s] | (uint)pixels[s + gOffset] << 8 | (uint)pixels[s + bOffset] << 16 |
-                              (readAlpha ? (uint)pixels[s + aOffset] << 24 : alpha);
-
-                        if (i == nextChunkStart)
-                        {
-                            // Seekable chunk boundary: close the run and restart from a self-contained literal
-                            if (run > 0)
-                            {
-                                output[p++] = (byte)(OpRun | (run - 1));
-                                run = 0;
-                            }
-                            chunkOffsets[chunk++] = p;
-                            nextChunkStart = chunk < chunkCount ? nextChunkStart + seekChunkPixels : int.MaxValue;
-
-                            if (single)
-                            {
-                                output[p++] = OpRgb;
-                                output[p++] = (byte)px;
-                            }
-                            else
-                            {
-                                output[p++] = OpRgba;
-                                output[p++] = (byte)px;
-                                output[p++] = (byte)(px >> 8);
-                                output[p++] = (byte)(px >> 16);
-                                output[p++] = (byte)(px >> 24);
-                            }
-                            int h0 = Hash(px);
-                            index[h0] = px;
-                            valid = 1UL << h0;
-                            prev = px;
-                            continue;
-                        }
-
-                        if (px == prev)
-                        {
-                            run++;
-                            if (run == 62 || i == lastPixel)
-                            {
-                                output[p++] = (byte)(OpRun | (run - 1));
-                                run = 0;
-                            }
-                            continue;
-                        }
-
-                        if (run > 0)
-                        {
-                            output[p++] = (byte)(OpRun | (run - 1));
-                            run = 0;
-                        }
-
-                        int h = Hash(px);
-                        if (index[h] == px && (valid >> h & 1) != 0)
-                        {
-                            output[p++] = (byte)(OpIndex | h);
-                        }
-                        else
-                        {
-                            index[h] = px;
-                            valid |= 1UL << h;
-
-                            if (single)
-                            {
-                                int d = (sbyte)(px - prev);
-                                if (d is >= -32 and < 32)
-                                {
-                                    output[p++] = (byte)(OpDiff | (d + 32));
-                                }
-                                else
-                                {
-                                    output[p++] = OpRgb;
-                                    output[p++] = (byte)px;
-                                }
-                            }
-                            else if ((px ^ prev) >> 24 == 0)
-                            {
-                                // Differences wrap around like the reference implementation's signed chars
-                                int vr = (sbyte)(px - prev);
-                                int vg = (sbyte)((px >> 8) - (prev >> 8));
-                                int vb = (sbyte)((px >> 16) - (prev >> 16));
-                                int vgr = (sbyte)(vr - vg);
-                                int vgb = (sbyte)(vb - vg);
-
-                                if (vr is > -3 and < 2 && vg is > -3 and < 2 && vb is > -3 and < 2)
-                                {
-                                    output[p++] = (byte)(OpDiff | (vr + 2) << 4 | (vg + 2) << 2 | (vb + 2));
-                                }
-                                else if (vgr is > -9 and < 8 && vg is > -33 and < 32 && vgb is > -9 and < 8)
-                                {
-                                    output[p++] = (byte)(OpLuma | (vg + 32));
-                                    output[p++] = (byte)((vgr + 8) << 4 | (vgb + 8));
-                                }
-                                else
-                                {
-                                    output[p++] = OpRgb;
-                                    output[p++] = (byte)px;
-                                    output[p++] = (byte)(px >> 8);
-                                    output[p++] = (byte)(px >> 16);
-                                }
-                            }
-                            else
-                            {
-                                output[p++] = OpRgba;
-                                output[p++] = (byte)px;
-                                output[p++] = (byte)(px >> 8);
-                                output[p++] = (byte)(px >> 16);
-                                output[p++] = (byte)(px >> 24);
-                            }
-                        }
-
-                        prev = px;
-                    }
+                    p = streamPixels >= MinParallelEncodePixels && Environment.ProcessorCount > 1
+                        ? EncodeParallel(src, dst, offsets, args, streamPixels)
+                        : QoiBurst.EncodeRange(src, dst, HeaderSize, offsets, null, ref args, 0, streamPixels);
                 }
             }
 
@@ -366,6 +239,150 @@ namespace LTMX.QOI
                 p = WriteSeekFooter(output, p, seekChunkPixels, chunkCount);
             }
 
+            return p;
+        }
+
+        /// Images at least this large (in stream pixels) are encoded on multiple threads
+        private const int MinParallelEncodePixels = 1 << 16;
+
+        /// Smallest segment of a plain file encoded on its own thread
+        private const int MinSegmentPixels = 1 << 14;
+
+        /// <summary>
+        /// Encodes segments of the stream in parallel, each one at its worst case offset, then moves them back to back.
+        /// The bytes are exactly those of a sequential encode:
+        /// <list type="bullet">
+        /// <item>Seekable files: segments are batches of chunks, which are self-contained.</item>
+        /// <item>Plain files: segments start where the pixel differs from the previous one, so no run crosses them, with the
+        /// encoder's index at that point, rebuilt from the last pixel of every hash before it.</item>
+        /// </list>
+        /// The worst case layout sums the same per pixel and per chunk bounds as <see cref="MaxEncodedSize"/>.
+        /// </summary>
+        private static unsafe int EncodeParallel(byte* src, byte* dst, int* offsets, QoiBurst.EncodeArgs args,
+            int streamPixels)
+        {
+            int chunkPixels = args.SeekChunkPixels;
+            bool seekable = args.ChunkCount > 0;
+            int targetSegments = Environment.ProcessorCount * 4;
+            var source = (IntPtr)src;
+
+            int[] bounds;
+            uint[] states = null;
+            if (seekable)
+            {
+                int chunksPerSegment = Math.Max(1, (args.ChunkCount + targetSegments - 1) / targetSegments);
+                int segmentCount = (args.ChunkCount + chunksPerSegment - 1) / chunksPerSegment;
+                bounds = new int[segmentCount + 1];
+                for (int s = 0; s < segmentCount; s++) bounds[s] = s * chunksPerSegment * chunkPixels;
+                bounds[segmentCount] = streamPixels;
+            }
+            else
+            {
+                int rangePixels = Math.Max(MinSegmentPixels, (streamPixels + targetSegments - 1) / targetSegments);
+                int rangeCount = (streamPixels + rangePixels - 1) / rangePixels;
+                var splits = new int[rangeCount];
+                var firstNotBlack = new int[rangeCount];
+
+                // Pass 1: where each range can start (its first pixel that doesn't continue a run), and the end of the opaque
+                // black run that may start the stream: the encoder's run covers it, so these pixels never enter the index
+                Parallel.For(0, rangeCount, r =>
+                {
+                    var a = args;
+                    int from = r * rangePixels, to = Math.Min(from + rangePixels, streamPixels);
+                    uint previous = r == 0 ? OpaqueBlack : QoiBurst.PixelAt((byte*)source, ref a, from - 1);
+                    splits[r] = r == 0 ? 0 : QoiBurst.FindDifferent((byte*)source, ref a, from, to, previous);
+                    firstNotBlack[r] = r > 0 && previous == OpaqueBlack
+                        ? splits[r]
+                        : QoiBurst.FindDifferent((byte*)source, ref a, from, to, OpaqueBlack);
+                });
+                int indexStart = streamPixels;
+                for (int r = 0; r < rangeCount; r++)
+                {
+                    if (firstNotBlack[r] < 0) continue;
+                    indexStart = firstNotBlack[r];
+                    break;
+                }
+
+                // Pass 2: index entries left behind by each range
+                var tables = new uint[rangeCount * 64];
+                var found = new ulong[rangeCount];
+                fixed (uint* tablePointer = tables)
+                {
+                    var tableBase = (IntPtr)tablePointer;
+                    Parallel.For(0, rangeCount, r =>
+                    {
+                        var a = args;
+                        int from = Math.Max(r * rangePixels, indexStart), to = Math.Min(r * rangePixels + rangePixels, streamPixels);
+                        if (from < to) found[r] = QoiBurst.CollectIndex((byte*)source, ref a, from, to, (uint*)tableBase + r * 64);
+                    });
+                }
+
+                // The index at a split merges the entries of every range before it. Pixels between a range start and its split
+                // repeat the last pixel of the previous range, which is already one of its entries.
+                var segmentStarts = new System.Collections.Generic.List<int> { 0 };
+                var segmentStates = new System.Collections.Generic.List<uint>(rangeCount * 64);
+                var index = new uint[64];
+                segmentStates.AddRange(index);
+                for (int r = 0; r < rangeCount; r++)
+                {
+                    if (r > 0 && splits[r] >= 0)
+                    {
+                        segmentStarts.Add(splits[r]);
+                        segmentStates.AddRange(index);
+                    }
+                    for (int h = 0; h < 64; h++)
+                        if ((found[r] >> h & 1) != 0) index[h] = tables[r * 64 + h];
+                }
+                segmentStarts.Add(streamPixels);
+                bounds = segmentStarts.ToArray();
+                states = segmentStates.ToArray();
+            }
+
+            int count = bounds.Length - 1;
+            if (count == 1) return QoiBurst.EncodeRange(src, dst, HeaderSize, offsets, null, ref args, 0, streamPixels);
+
+            long worstPerPixel = (int)args.Channels + 1;
+            var regions = new int[count];
+            long position = HeaderSize;
+            for (int s = 0; s < count; s++)
+            {
+                regions[s] = (int)position;
+                int pixels = bounds[s + 1] - bounds[s];
+                position += pixels * worstPerPixel + (seekable ? (pixels + chunkPixels - 1) / chunkPixels : 0);
+            }
+
+            var ends = new int[count];
+            var output = (IntPtr)dst;
+            var chunkOffsets = (IntPtr)offsets;
+            fixed (uint* statePointer = states)
+            {
+                var stateBase = (IntPtr)statePointer;
+                Parallel.For(0, count, s =>
+                {
+                    var a = args;
+                    uint* state = seekable || s == 0 ? null : (uint*)stateBase + s * 64;
+                    ends[s] = QoiBurst.EncodeRange((byte*)source, (byte*)output, regions[s], (int*)chunkOffsets, state, ref a,
+                        bounds[s], bounds[s + 1]);
+                });
+            }
+
+            // Segments only move towards the start of the buffer: memmove semantics handle the overlap
+            int p = ends[0];
+            for (int s = 1; s < count; s++)
+            {
+                int length = ends[s] - regions[s];
+                int shift = regions[s] - p;
+                if (shift != 0)
+                {
+                    Buffer.MemoryCopy(dst + regions[s], dst + p, length, length);
+                    if (seekable)
+                    {
+                        int last = (bounds[s + 1] + chunkPixels - 1) / chunkPixels;
+                        for (int c = bounds[s] / chunkPixels; c < last; c++) offsets[c] -= shift;
+                    }
+                }
+                p += length;
+            }
             return p;
         }
 
@@ -460,12 +477,166 @@ namespace LTMX.QOI
                     throw e.InnerException is QoiException q ? q : new QoiException("Corrupted QOI data.", e.InnerException);
                 }
             }
-            else
+            else if (!parallel || !TryDecodePlainParallel(data, pixels, header, outputChannels, flipY))
             {
                 DecodeRange(data, HeaderSize, data.Length, pixels, header, outputChannels, flipY, 0, header.StreamPixelCount);
             }
 
             return new QoiImage(header, pixels, outputChannels);
+        }
+
+        /// Plain files with at least this many op bytes are decoded on multiple threads
+        private const int MinParallelDecodeBytes = 1 << 18;
+
+        /// Op bytes of a segment of a plain file decoded on its own thread
+        private const int MinDecodeSegmentBytes = 1 << 16;
+
+        /// Ops the true and guessed decoders may run in lockstep before a segment is decoded in order instead
+        private const int MaxSyncOps = 1 << 12;
+
+        /// <summary>
+        /// Decodes a plain file on multiple threads (see <see cref="QoiBurst"/>, parallel decoding of plain files).
+        /// Returns false, possibly after writing some pixels, when the data looks corrupted or isn't worth splitting:
+        /// the caller then decodes it in order, which reports errors exactly.
+        /// </summary>
+        private static unsafe bool TryDecodePlainParallel(byte[] data, byte[] pixels, QoiHeader header, int outputChannels, bool flipY)
+        {
+            int opsStart = HeaderSize, opsEnd = data.Length - PaddingSize;
+            int segmentCount = Math.Min(Environment.ProcessorCount * 2, (opsEnd - opsStart) / MinDecodeSegmentBytes);
+            if (Environment.ProcessorCount < 2 || opsEnd - opsStart < MinParallelDecodeBytes || segmentCount < 3)
+                return false;
+
+            var args = new QoiBurst.DecodeArgs
+            {
+                Width = header.Width, Height = header.Height, BytesPerSample = header.BytesPerSample, OutputChannels = outputChannels,
+                Channels = header.Channels, SampleFormat = header.SampleFormat, FlipY = (byte)(flipY ? 1 : 0)
+            };
+            long total = header.StreamPixelCount;
+
+            var bounds = new int[segmentCount + 1];
+            for (int s = 0; s <= segmentCount; s++) bounds[s] = opsStart + (int)((long)(opsEnd - opsStart) * s / segmentCount);
+
+            // States hold 65 entries per segment: the index then the pixel
+            var scanStates = new uint[segmentCount * 65];
+            var lastUses = new int[segmentCount * 64];
+            var scanPixels = new long[segmentCount];
+            var scanEnds = new int[segmentCount];
+            var scanned = new bool[segmentCount];
+            var states = new uint[segmentCount * 65];
+            var starts = new int[segmentCount];
+            var firstPixels = new long[segmentCount + 1];
+            var decodedInOrder = new bool[segmentCount];
+
+            fixed (byte* dataPointer = data)
+            fixed (byte* outputPointer = pixels)
+            fixed (uint* scanStatePointer = scanStates)
+            fixed (int* lastUsePointer = lastUses)
+            fixed (uint* statePointer = states)
+            {
+                var source = (IntPtr)dataPointer;
+                var output = (IntPtr)outputPointer;
+                var scanStateBase = (IntPtr)scanStatePointer;
+                var lastUseBase = (IntPtr)lastUsePointer;
+                var stateBase = (IntPtr)statePointer;
+                int length = data.Length;
+
+                // 1. Guessed runs of segments [from, to), from the initial state
+                void Scan(int from, int to) => Parallel.For(from, to, s =>
+                {
+                    var a = args;
+                    long n;
+                    int end;
+                    scanned[s] = 1 == QoiBurst.ScanSegment((byte*)source, length, bounds[s], bounds[s + 1], ref a,
+                        (uint*)scanStateBase + s * 65, (int*)lastUseBase + s * 64, &n, &end);
+                    scanPixels[s] = n;
+                    scanEnds[s] = end;
+                });
+
+                // The first segment is decoded for real, while the second one is scanned. It's a probe: files made of small
+                // differences rarely resynchronize, and are then decoded in order without wasting work.
+                for (int k = 0; k < 64; k++) statePointer[65 + k] = 0;
+                statePointer[65 + 64] = OpaqueBlack;
+                bool firstOk = false;
+                int firstDecoded = 0, firstEnd = 0;
+                Parallel.Invoke(() =>
+                {
+                    var a = args;
+                    int decoded, end;
+                    firstOk = QoiBurst.DecodeSegment((byte*)source, length, opsStart, length, bounds[1], (byte*)output, ref a, 0,
+                        (int)total, (uint*)stateBase + 65, &decoded, &end) == QoiBurst.DecodeOk;
+                    firstDecoded = decoded;
+                    firstEnd = end;
+                }, () => Scan(1, 2));
+                if (!firstOk) return false;
+
+                // 2. True start state and pixel of every segment, in order
+                decodedInOrder[0] = true;
+                starts[0] = opsStart;
+                starts[1] = firstEnd;
+                firstPixels[1] = firstDecoded;
+
+                int failures = 0;
+                for (int s = 1; s < segmentCount - 1; s++)
+                {
+                    if (firstPixels[s] >= total) return false;
+                    uint* current = statePointer + (s + 1) * 65;
+                    Buffer.MemoryCopy(statePointer + s * 65, current, 65 * sizeof(uint), 65 * sizeof(uint));
+
+                    long n = 0;
+                    int end = 0;
+                    int result = scanned[s]
+                        ? QoiBurst.SyncSegment(dataPointer, length, bounds[s], bounds[s + 1], starts[s], ref args, current,
+                            scanStatePointer + s * 65, lastUsePointer + s * 64, scanPixels[s], scanEnds[s], MaxSyncOps, &n, &end)
+                        : QoiBurst.SyncGaveUp;
+                    if (result == QoiBurst.SyncInvalid) return false;
+
+                    if (result == QoiBurst.SyncGaveUp)
+                    {
+                        Buffer.MemoryCopy(statePointer + s * 65, current, 65 * sizeof(uint), 65 * sizeof(uint));
+                        int decoded;
+                        if (s == 1 || ++failures == 2)
+                        {
+                            // This file doesn't resynchronize: the following segments are decoded in order too
+                            if (QoiBurst.DecodeSegment(dataPointer, length, starts[s], length, int.MaxValue, outputPointer, ref args,
+                                    (int)firstPixels[s], (int)(total - firstPixels[s]), current, &decoded, &end) != QoiBurst.DecodeOk ||
+                                decoded != total - firstPixels[s])
+                                return false;
+                            for (int t = s; t < segmentCount; t++) decodedInOrder[t] = true;
+                            break;
+                        }
+
+                        // Decoded for real, in order, from the true start state
+                        if (QoiBurst.DecodeSegment(dataPointer, length, starts[s], length, bounds[s + 1], outputPointer, ref args,
+                                (int)firstPixels[s], (int)(total - firstPixels[s]), current, &decoded, &end) != QoiBurst.DecodeOk)
+                            return false;
+                        n = decoded;
+                        decodedInOrder[s] = true;
+                    }
+                    else failures = 0;
+
+                    if (s == 1) Scan(2, segmentCount - 1);
+                    starts[s + 1] = end;
+                    firstPixels[s + 1] = firstPixels[s] + n;
+                }
+                firstPixels[segmentCount] = total;
+                if (!decodedInOrder[segmentCount - 1] && firstPixels[segmentCount - 1] >= total) return false;
+
+                // 3. Every other segment, in parallel from its true start
+                bool ok = true;
+                Parallel.For(0, segmentCount, s =>
+                {
+                    if (decodedInOrder[s]) return;
+                    var a = args;
+                    int count = (int)(firstPixels[s + 1] - firstPixels[s]);
+                    int decoded, end;
+                    int result = QoiBurst.DecodeSegment((byte*)source, length, starts[s], length, int.MaxValue, (byte*)output, ref a,
+                        (int)firstPixels[s], count, (uint*)stateBase + s * 65, &decoded, &end);
+                    // Every segment must end exactly where the next one starts
+                    if (result != QoiBurst.DecodeOk || decoded != count || (s < segmentCount - 1 && end != starts[s + 1]))
+                        ok = false;
+                });
+                return ok;
+            }
         }
 
         /// <summary>
@@ -491,141 +662,29 @@ namespace LTMX.QOI
         }
 
         /// Decodes <paramref name="count"/> stream pixels starting at stream pixel <paramref name="start"/>
-        private static void DecodeRange(ReadOnlySpan<byte> data, int p, int opsEnd, Span<byte> output, in QoiHeader header,
+        private static unsafe void DecodeRange(ReadOnlySpan<byte> data, int p, int opsEnd, Span<byte> output, in QoiHeader header,
             int outputChannels, bool flipY, int start, int count)
         {
-            int width = header.Width;
-            int height = header.Height;
-            int pixelCount = header.PixelCount;
-            int bytesPerSample = header.BytesPerSample;
-            bool single = header.Channels == QoiChannels.R;
-            bool fileAlpha = header.Channels == QoiChannels.Rgba;
-            uint one = OneBits(header.SampleFormat);
+            // The Burst kernel trusts the output size, it only bounds checks reads of the (possibly corrupted) data
+            if (output.Length < (long)header.PixelCount * outputChannels * header.BytesPerSample ||
+                start < 0 || count < 0 || (long)start + count > header.StreamPixelCount)
+                throw new ArgumentOutOfRangeException(nameof(output));
 
-            int stride = outputChannels * bytesPerSample;
-            int rowBytes = width * stride;
-            // Added after the last pixel of a row, the offset already moved one row forward
-            int rowJump = flipY ? -2 * rowBytes : 0;
-            int g = bytesPerSample, b = 2 * bytesPerSample, a = 3 * bytesPerSample;
-
-            int plane = start / pixelCount;
-            int pixel = start - plane * pixelCount;
-            int x = pixel % width;
-            int row = flipY ? height - 1 - pixel / width : pixel / width;
-            int byteInSample = bytesPerSample - 1 - plane;
-            int o = row * rowBytes + x * stride + byteInSample;
-            byte alpha = (byte)(one >> (byteInSample * 8));
-
-            Span<uint> index = stackalloc uint[64];
-            uint px = OpaqueBlack;
-            int run = 0;
-
-            try
+            var args = new QoiBurst.DecodeArgs
             {
-                for (int n = 0; n < count; n++)
-                {
-                    if (run > 0)
-                    {
-                        run--;
-                    }
-                    else
-                    {
-                        if (p >= opsEnd) throw new QoiException("Unexpected end of QOI data.");
-                        int b1 = data[p++];
+                Width = header.Width, Height = header.Height, BytesPerSample = header.BytesPerSample, OutputChannels = outputChannels,
+                Channels = header.Channels, SampleFormat = header.SampleFormat, FlipY = (byte)(flipY ? 1 : 0)
+            };
 
-                        if (single)
-                        {
-                            if (b1 == OpRgb)
-                                px = data[p++] | OpaqueBlack;
-                            else if (b1 == OpRgba || (b1 & Mask2) == OpLuma)
-                                throw new QoiException($"Invalid op 0x{b1:X2} in a single channel QOI file.");
-                            else if ((b1 & Mask2) == OpIndex)
-                                px = index[b1];
-                            else if ((b1 & Mask2) == OpDiff)
-                                px = (px + (uint)(b1 & 0x3F) - 32) & 0xFF | OpaqueBlack;
-                            else
-                                run = b1 & 0x3F;
-                        }
-                        else if (b1 == OpRgb)
-                        {
-                            px = (px & 0xFF000000) | data[p] | (uint)data[p + 1] << 8 | (uint)data[p + 2] << 16;
-                            p += 3;
-                        }
-                        else if (b1 == OpRgba)
-                        {
-                            px = data[p] | (uint)data[p + 1] << 8 | (uint)data[p + 2] << 16 | (uint)data[p + 3] << 24;
-                            p += 4;
-                        }
-                        else
-                        {
-                            switch (b1 & Mask2)
-                            {
-                                case OpIndex:
-                                    px = index[b1];
-                                    break;
-                                case OpDiff:
-                                    px = Add(px, (b1 >> 4 & 3) - 2, (b1 >> 2 & 3) - 2, (b1 & 3) - 2);
-                                    break;
-                                case OpLuma:
-                                    int b2 = data[p++];
-                                    int vg = (b1 & 0x3F) - 32;
-                                    px = Add(px, vg - 8 + (b2 >> 4 & 0x0F), vg, vg - 8 + (b2 & 0x0F));
-                                    break;
-                                default:
-                                    run = b1 & 0x3F;
-                                    break;
-                            }
-                        }
+            int result;
+            fixed (byte* src = data)
+            fixed (byte* dst = output)
+                result = QoiBurst.DecodeRange(src, data.Length, p, opsEnd, dst, ref args, start, count);
 
-                        index[Hash(px)] = px;
-                    }
-
-                    if (single)
-                    {
-                        output[o] = (byte)px;
-                        if (outputChannels >= 3)
-                        {
-                            output[o + g] = (byte)px;
-                            output[o + b] = (byte)px;
-                            if (outputChannels == 4) output[o + a] = alpha;
-                        }
-                    }
-                    else
-                    {
-                        output[o] = (byte)px;
-                        output[o + g] = (byte)(px >> 8);
-                        output[o + b] = (byte)(px >> 16);
-                        if (outputChannels == 4) output[o + a] = fileAlpha ? (byte)(px >> 24) : alpha;
-                    }
-                    o += stride;
-
-                    if (++x == width)
-                    {
-                        x = 0;
-                        o += rowJump;
-                    }
-
-                    if (++pixel == pixelCount && ++plane < bytesPerSample)
-                    {
-                        // Next byte plane, back to the first pixel
-                        pixel = 0;
-                        byteInSample--;
-                        o = (flipY ? (height - 1) * rowBytes : 0) + byteInSample;
-                        alpha = (byte)(one >> (byteInSample * 8));
-                    }
-                }
-            }
-            catch (IndexOutOfRangeException e)
-            {
-                throw new QoiException("Unexpected end of QOI data.", e);
-            }
+            if (result == QoiBurst.DecodeTruncated)
+                throw new QoiException("Unexpected end of QOI data.");
+            if (result != QoiBurst.DecodeOk)
+                throw new QoiException($"Invalid op 0x{result & 0xFF:X2} in a single channel QOI file.");
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint Add(uint px, int dr, int dg, int db) =>
-            (px & 0xFF000000) |
-            (uint)((int)(px & 0xFF) + dr) & 0xFF |
-            ((uint)((int)(px >> 8 & 0xFF) + dg) & 0xFF) << 8 |
-            ((uint)((int)(px >> 16 & 0xFF) + db) & 0xFF) << 16;
     }
 }

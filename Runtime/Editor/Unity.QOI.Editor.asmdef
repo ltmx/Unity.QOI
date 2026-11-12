@@ -2,13 +2,15 @@
     "name": "Unity.QOI.Editor",
     "rootNamespace": "LTMX.QOI.Editor",
     "references": [
-        "GUID:fd045858c9fa4cd4dbcb0cba25dbf9b5"
+        "GUID:fd045858c9fa4cd4dbcb0cba25dbf9b5",
+        "Unity.Burst",
+        "Unity.Mathematics"
     ],
     "includePlatforms": [
         "Editor"
     ],
     "excludePlatforms": [],
-    "allowUnsafeCode": false,
+    "allowUnsafeCode": true,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,

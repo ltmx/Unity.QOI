@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEditor;
@@ -11,7 +12,7 @@ namespace LTMX.QOI.Editor
     /// <summary>
     /// Qoi Importer
     /// </summary>
-    [ScriptedImporter(5, "qoi")]
+    [ScriptedImporter(6, "qoi")]
     public class QoiImporter : ScriptedImporter
     {
         // Texture import settings
@@ -31,14 +32,56 @@ namespace LTMX.QOI.Editor
         [Range(0, 16)]
         public int anisoLevel = 1;
 
-        // Size and compression
+        // Size and compression: the default settings, used by every platform without an override
         public MaxTextureSize maxTextureSize = MaxTextureSize.x2048;
+        public QoiTextureFormat format = QoiTextureFormat.Automatic;
         public TextureImporterCompression compression = TextureImporterCompression.Compressed;
         public TextureCompressionQuality compressionQuality = TextureCompressionQuality.Normal;
         public bool crunchedCompression;
+        public QoiCompressor compressor = QoiCompressor.Unity;
+
+        /// <summary>Per platform overrides of the size and compression settings, by build target group name.</summary>
+        public List<PlatformSettings> platformSettings = new();
+
+        /// <summary>Size and compression settings of one build target group ("Standalone", "Android"…).</summary>
+        [Serializable]
+        public class PlatformSettings
+        {
+            public string buildTarget;
+            public bool overridden;
+            public MaxTextureSize maxTextureSize = MaxTextureSize.x2048;
+            public QoiTextureFormat format = QoiTextureFormat.Automatic;
+            public TextureImporterCompression compression = TextureImporterCompression.Compressed;
+            public TextureCompressionQuality compressionQuality = TextureCompressionQuality.Normal;
+            public bool crunchedCompression;
+            public QoiCompressor compressor = QoiCompressor.Unity;
+        }
+
+        /// <summary>The settings a build target group imports with: its override, or the default settings.</summary>
+        public PlatformSettings GetPlatformSettings(BuildTargetGroup group)
+        {
+            string name = group.ToString();
+            foreach (var p in platformSettings)
+                if (p.overridden && p.buildTarget == name)
+                    return p;
+            return new PlatformSettings
+            {
+                buildTarget = name, maxTextureSize = maxTextureSize, format = format, compression = compression,
+                compressionQuality = compressionQuality, crunchedCompression = crunchedCompression, compressor = compressor
+            };
+        }
+
+        // Settings of the platform being imported for (set in OnImportAsset)
+        private PlatformSettings _settings;
+        private bool _mobile;
 
         public override void OnImportAsset(AssetImportContext ctx)
         {
+            // Reading the build target makes the asset reimport when the active platform changes
+            var group = BuildPipeline.GetBuildTargetGroup(ctx.selectedBuildTarget);
+            _settings = GetPlatformSettings(group);
+            _mobile = IsMobile(group);
+
             QoiImage img;
             try
             {
@@ -73,7 +116,7 @@ namespace LTMX.QOI.Editor
                 targetHeight = ScaleToPowerOfTwo(height, npotScale);
             }
 
-            int maxSize = (int)maxTextureSize;
+            int maxSize = (int)_settings.maxTextureSize;
             if (targetWidth > maxSize || targetHeight > maxSize)
             {
                 float scale = (float)maxSize / Math.Max(targetWidth, targetHeight);
@@ -86,21 +129,25 @@ namespace LTMX.QOI.Editor
             height = targetHeight;
 
             bool linear = IsLinear(img);
-            var format = GetFormat(img);
-
-            var tex = new Texture2D(width, height, format, mipMapEnabled, linear)
+            bool compressed = TryGetCompressedFormat(img, width, height, out var compressedFormat);
+            Texture2D tex;
+            if (compressed && UseFastCompressor(img, compressedFormat))
             {
-                name = Path.GetFileNameWithoutExtension(ctx.assetPath),
-                alphaIsTransparency = alphaIsTransparency,
-                wrapMode = wrapMode,
-                filterMode = filterMode,
-                anisoLevel = anisoLevel
-            };
-            tex.SetPixelData(pixels, 0);
-            tex.Apply(mipMapEnabled);
-
-            if (TryGetCompressedFormat(img, width, height, out var compressedFormat))
-                EditorUtility.CompressTexture(tex, compressedFormat, compressionQuality);
+                tex = QoiFastCompressor.CreateTexture2D(pixels, channels, width, height, compressedFormat, mipMapEnabled, linear,
+                    textureType == TextureImporterType.NormalMap);
+            }
+            else
+            {
+                tex = new Texture2D(width, height, GetFormat(img), mipMapEnabled, linear);
+                tex.SetPixelData(pixels, 0);
+                tex.Apply(mipMapEnabled);
+                if (compressed) EditorUtility.CompressTexture(tex, compressedFormat, _settings.compressionQuality);
+            }
+            tex.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
+            tex.alphaIsTransparency = alphaIsTransparency;
+            tex.wrapMode = wrapMode;
+            tex.filterMode = filterMode;
+            tex.anisoLevel = anisoLevel;
 
             ctx.AddObjectToAsset("texture", tex);
             ctx.SetMainObject(tex);
@@ -128,23 +175,91 @@ namespace LTMX.QOI.Editor
             };
         }
 
-        // Block compression needs dimensions that are multiples of 4.
-        // HDR: BC6H (no alpha, so RGBA and single channel HDR stay uncompressed). Single channel: BC4.
-        private bool TryGetCompressedFormat(QoiImage img, int width, int height, out TextureFormat format)
+        // The fast compressor handles 8-bit images in the formats it supports, crunch excepted
+        private bool UseFastCompressor(QoiImage img, TextureFormat compressedFormat) =>
+            _settings.compressor == QoiCompressor.Fast && img.SampleFormat == QoiSampleFormat.Byte && QoiFastCompressor.Supports(compressedFormat);
+
+        private static bool IsMobile(BuildTargetGroup group) => group is BuildTargetGroup.Android or BuildTargetGroup.iOS;
+
+        private bool TryGetCompressedFormat(QoiImage img, int width, int height, out TextureFormat result)
         {
             bool hdr = img.SampleFormat != QoiSampleFormat.Byte;
             bool single = img.Channels == QoiChannels.R;
             bool hasAlpha = img.Channels == QoiChannels.Rgba;
-            format = compression switch
+            return TryResolveFormat(_settings, _mobile, hdr, single, hasAlpha, textureType == TextureImporterType.NormalMap,
+                width, height, out result);
+        }
+
+        /// <summary>
+        /// The compressed format a texture imports to, or false when it stays uncompressed. Automatic picks:
+        /// <list type="bullet">
+        /// <item>Desktop: BC6H for HDR (no alpha, so RGBA and single channel HDR stay uncompressed), BC4 for single channel,
+        /// BC7 for high quality, else DXT1 / DXT5 (crunched or not).</item>
+        /// <item>Mobile: ASTC, 4x4 for high quality and normal maps, 8x8 for low quality, else 6x6. EAC R11 for single
+        /// channel. HDR stays uncompressed: pick an ASTC HDR format explicitly when the target GPUs support it.</item>
+        /// </list>
+        /// BC, ETC and EAC formats need a width and height multiple of 4. ASTC takes any size.
+        /// </summary>
+        internal static bool TryResolveFormat(PlatformSettings s, bool mobile, bool hdr, bool single, bool hasAlpha, bool normalMap,
+            int width, int height, out TextureFormat result)
+        {
+            result = default;
+            var format = s.format;
+            if (format == QoiTextureFormat.Uncompressed ||
+                (format == QoiTextureFormat.Automatic && s.compression == TextureImporterCompression.Uncompressed))
+                return false;
+
+            if (format == QoiTextureFormat.Automatic)
             {
-                _ when hdr => BC6H,
-                _ when single => BC4,
-                TextureImporterCompression.CompressedHQ => BC7,
-                _ when hasAlpha => crunchedCompression ? DXT5Crunched : DXT5,
-                _ => crunchedCompression ? DXT1Crunched : DXT1
+                if (mobile)
+                {
+                    if (hdr) return false;
+                    format = single ? QoiTextureFormat.EAC_R
+                        : s.crunchedCompression ? (hasAlpha ? QoiTextureFormat.ETC2_RGBA : QoiTextureFormat.ETC2_RGB)
+                        : s.compression == TextureImporterCompression.CompressedHQ || normalMap ? QoiTextureFormat.ASTC_4x4
+                        : s.compression == TextureImporterCompression.CompressedLQ ? QoiTextureFormat.ASTC_8x8
+                        : QoiTextureFormat.ASTC_6x6;
+                }
+                else
+                {
+                    if (hdr && (single || hasAlpha)) return false;
+                    format = hdr ? QoiTextureFormat.BC6H
+                        : single ? QoiTextureFormat.BC4
+                        : s.compression == TextureImporterCompression.CompressedHQ ? QoiTextureFormat.BC7
+                        : hasAlpha ? QoiTextureFormat.BC3
+                        : QoiTextureFormat.BC1;
+                }
+            }
+
+            bool crunch = s.crunchedCompression;
+            result = format switch
+            {
+                QoiTextureFormat.BC1 => crunch ? DXT1Crunched : DXT1,
+                QoiTextureFormat.BC3 => crunch ? DXT5Crunched : DXT5,
+                QoiTextureFormat.BC4 => BC4,
+                QoiTextureFormat.BC5 => BC5,
+                QoiTextureFormat.BC6H => BC6H,
+                QoiTextureFormat.BC7 => BC7,
+                QoiTextureFormat.ETC2_RGB => crunch ? ETC_RGB4Crunched : ETC2_RGB,
+                QoiTextureFormat.ETC2_RGBA => crunch ? ETC2_RGBA8Crunched : ETC2_RGBA8,
+                QoiTextureFormat.EAC_R => EAC_R,
+                QoiTextureFormat.EAC_RG => EAC_RG,
+                QoiTextureFormat.ASTC_4x4 => ASTC_4x4,
+                QoiTextureFormat.ASTC_5x5 => ASTC_5x5,
+                QoiTextureFormat.ASTC_6x6 => ASTC_6x6,
+                QoiTextureFormat.ASTC_8x8 => ASTC_8x8,
+                QoiTextureFormat.ASTC_10x10 => ASTC_10x10,
+                QoiTextureFormat.ASTC_12x12 => ASTC_12x12,
+                QoiTextureFormat.ASTC_HDR_4x4 => ASTC_HDR_4x4,
+                QoiTextureFormat.ASTC_HDR_5x5 => ASTC_HDR_5x5,
+                QoiTextureFormat.ASTC_HDR_6x6 => ASTC_HDR_6x6,
+                QoiTextureFormat.ASTC_HDR_8x8 => ASTC_HDR_8x8,
+                QoiTextureFormat.ASTC_HDR_10x10 => ASTC_HDR_10x10,
+                QoiTextureFormat.ASTC_HDR_12x12 => ASTC_HDR_12x12,
+                _ => throw new ArgumentOutOfRangeException(nameof(s), format, null)
             };
-            bool canCompress = !hdr || (!single && !hasAlpha);
-            return compression != TextureImporterCompression.Uncompressed && canCompress && width % 4 == 0 && height % 4 == 0;
+            bool astc = format >= QoiTextureFormat.ASTC_4x4;
+            return astc || (width % 4 == 0 && height % 4 == 0);
         }
 
         // -------------------------------------------------------------------------------------------------------------
@@ -186,7 +301,23 @@ namespace LTMX.QOI.Editor
                 CubemapLayout.HorizontalStrip => w / 6,
                 _ => h / 6
             };
-            faceSize = Math.Max(1, Math.Min(faceSize, (int)maxTextureSize));
+            faceSize = Math.Max(1, Math.Min(faceSize, (int)_settings.maxTextureSize));
+
+            bool compressed = TryGetCompressedFormat(img, faceSize, faceSize, out var compressedFormat);
+            if (compressed && UseFastCompressor(img, compressedFormat))
+            {
+                var faces = new byte[6][];
+                for (int f = 0; f < 6; f++) faces[f] = BuildFace(img, layout, f, faceSize);
+                var fast = QoiFastCompressor.CreateCubemap(faces, img.PixelChannels == 3 ? 4 : img.PixelChannels, faceSize,
+                    compressedFormat, mipMapEnabled, IsLinear(img));
+                fast.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
+                fast.wrapMode = TextureWrapMode.Clamp;
+                fast.filterMode = filterMode;
+                fast.anisoLevel = anisoLevel;
+                ctx.AddObjectToAsset("texture", fast);
+                ctx.SetMainObject(fast);
+                return;
+            }
 
             // 3 channel 8-bit faces are expanded to RGBA: there is no 24-bit cubemap graphics format.
             var format = GetFormat(img);
@@ -207,8 +338,8 @@ namespace LTMX.QOI.Editor
                 cube.SetPixelData(BuildFace(img, layout, f, faceSize), 0, (CubemapFace)f);
             cube.Apply(mipMapEnabled);
 
-            if (TryGetCompressedFormat(img, faceSize, faceSize, out var compressedFormat))
-                EditorUtility.CompressCubemapTexture(cube, compressedFormat, compressionQuality);
+            if (compressed)
+                EditorUtility.CompressCubemapTexture(cube, compressedFormat, _settings.compressionQuality);
 
             ctx.AddObjectToAsset("texture", cube);
             ctx.SetMainObject(cube);
@@ -433,5 +564,54 @@ namespace LTMX.QOI.Editor
             x8192 = 8192,
             x16384 = 16384
         }
+    }
+
+    /// <summary>Block compressor of a QOI import.</summary>
+    public enum QoiCompressor
+    {
+        /// <summary>Unity's compressor, <see cref="EditorUtility.CompressTexture(Texture2D, TextureFormat, TextureCompressionQuality)"/>.</summary>
+        Unity = 0,
+        /// <summary>
+        /// The package's Burst compressor, multithreaded, with its own mipmaps. Formats it doesn't support yet fall back to
+        /// Unity's (see <see cref="QoiFastCompressor.Supports"/>).
+        /// </summary>
+        Fast = 1
+    }
+
+    /// <summary>
+    /// Texture format of a QOI import. Automatic follows the Compression setting and the platform: BC on desktop, ASTC on
+    /// mobile (see <see cref="QoiImporter.TryResolveFormat"/>). Values are serialized: never renumber them.
+    /// </summary>
+    public enum QoiTextureFormat
+    {
+        Automatic = 0,
+        Uncompressed = 1,
+
+        [InspectorName("BC (Desktop)/BC1 · RGB")] BC1 = 10,
+        [InspectorName("BC (Desktop)/BC3 · RGBA")] BC3 = 11,
+        [InspectorName("BC (Desktop)/BC4 · R")] BC4 = 12,
+        [InspectorName("BC (Desktop)/BC5 · RG, normal maps")] BC5 = 13,
+        [InspectorName("BC (Desktop)/BC6H · RGB HDR")] BC6H = 14,
+        [InspectorName("BC (Desktop)/BC7 · RGBA, high quality")] BC7 = 15,
+
+        [InspectorName("ETC2 (Mobile)/ETC2 · RGB")] ETC2_RGB = 20,
+        [InspectorName("ETC2 (Mobile)/ETC2 · RGBA")] ETC2_RGBA = 21,
+        [InspectorName("ETC2 (Mobile)/EAC · R")] EAC_R = 22,
+        [InspectorName("ETC2 (Mobile)/EAC · RG")] EAC_RG = 23,
+
+        // ASTC formats must stay last: TryResolveFormat tests format >= ASTC_4x4
+        [InspectorName("ASTC (Mobile)/4x4 · 8 bpp")] ASTC_4x4 = 30,
+        [InspectorName("ASTC (Mobile)/5x5 · 5.12 bpp")] ASTC_5x5 = 31,
+        [InspectorName("ASTC (Mobile)/6x6 · 3.56 bpp")] ASTC_6x6 = 32,
+        [InspectorName("ASTC (Mobile)/8x8 · 2 bpp")] ASTC_8x8 = 33,
+        [InspectorName("ASTC (Mobile)/10x10 · 1.28 bpp")] ASTC_10x10 = 34,
+        [InspectorName("ASTC (Mobile)/12x12 · 0.89 bpp")] ASTC_12x12 = 35,
+
+        [InspectorName("ASTC HDR (Mobile)/4x4 · 8 bpp")] ASTC_HDR_4x4 = 40,
+        [InspectorName("ASTC HDR (Mobile)/5x5 · 5.12 bpp")] ASTC_HDR_5x5 = 41,
+        [InspectorName("ASTC HDR (Mobile)/6x6 · 3.56 bpp")] ASTC_HDR_6x6 = 42,
+        [InspectorName("ASTC HDR (Mobile)/8x8 · 2 bpp")] ASTC_HDR_8x8 = 43,
+        [InspectorName("ASTC HDR (Mobile)/10x10 · 1.28 bpp")] ASTC_HDR_10x10 = 44,
+        [InspectorName("ASTC HDR (Mobile)/12x12 · 0.89 bpp")] ASTC_HDR_12x12 = 45
     }
 }

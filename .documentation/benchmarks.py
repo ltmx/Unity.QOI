@@ -9,30 +9,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ENCODE = {
     'columns': ['Image', 'Resolution', 'QOI size', 'CPU', 'GPU'],
     'rows': [
-        # image, resolution, size, cpu ms, gpu ms
-        ('Albedo', '512²', '1.2 MB', 3.8, 23.4),
-        ('Albedo', '1024²', '4.8 MB', 14.1, 6.3),
-        ('Albedo', '2048²', '19.5 MB', 50.7, 11.4),
-        ('Albedo', '4096²', '72.9 MB', 208.1, 34.9),
-        ('Normal map', '2048²', '15.7 MB', 80.1, 28.9),
-        ('Mask', '2048²', '2.8 MB', 48.3, 9.4),
-        ('Smooth gradient', '4096²', '29.7 MB', 238.7, 17.4),
-        ('HDR albedo (half)', '2048²', '19.2 MB', 213.6, 13.6),
+        # image, resolution, size, cpu ms (EncodeToQOI, plain file), gpu ms (QoiGpu.Encode, incl. readback)
+        ('Albedo', '512²', '1.0 MB', 1.5, 26.8),
+        ('Albedo', '1024²', '3.7 MB', 6.0, 4.0),
+        ('Albedo', '2048²', '14.1 MB', 19.4, 8.1),
+        ('Albedo', '4096²', '57.4 MB', 84.7, 25.6),
+        ('Normal map', '2048²', '3.1 MB', 14.3, 3.5),
+        ('Mask', '2048²', '12.0 MB', 12.4, 6.8),
+        ('Smooth gradient', '4096²', '2.9 MB', 48.7, 2.8),
+        ('HDR albedo (half)', '2048²', '17.5 MB', 41.3, 9.6),
     ],
 }
 
 DECODE = {
-    'columns': ['Image', 'Resolution', 'CPU 1 thread', 'CPU parallel', 'GPU', 'GPU, reused RT'],
+    'columns': ['Image', 'Resolution', 'CPU 1 thread', 'CPU parallel', 'CPU parallel, plain file', 'GPU', 'GPU, reused RT'],
     'rows': [
-        # image, resolution, cpu ms, cpu parallel ms, gpu ms, gpu reused ms (None: not measured)
-        ('Albedo', '512²', 5.4, 3.2, 5.4, 4.4),
-        ('Albedo', '1024²', 15.4, 7.8, 5.1, 4.9),
-        ('Albedo', '2048²', 48.8, 23.8, 8.8, 8.4),
-        ('Albedo', '4096²', 206.7, 82.1, 20.8, 19.4),
-        ('Normal map', '2048²', 56.2, 28.7, 13.7, 7.3),
-        ('Mask', '2048²', 50.0, 29.0, 7.3, 5.5),
-        ('Smooth gradient', '4096²', 214.5, 89.6, 14.4, 12.4),
-        ('HDR albedo (half)', '2048²', 109.5, 55.3, 20.2, None),
+        # image, resolution, cpu ms, cpu parallel ms (seekable), cpu parallel ms (plain), gpu ms, gpu reused ms
+        ('Albedo', '512²', 3.6, 1.0, 2.5, 11.2, 9.6),
+        ('Albedo', '1024²', 14.9, 3.3, 9.0, 10.7, 9.1),
+        ('Albedo', '2048²', 62.9, 9.5, 34.6, 18.7, 16.7),
+        ('Albedo', '4096²', 260.9, 49.9, 128.5, 42.5, 17.9),
+        ('Normal map', '2048²', 29.5, 4.8, 29.7, 4.7, 4.0),
+        ('Mask', '2048²', 40.8, 6.8, 22.2, 15.5, 14.2),
+        ('Smooth gradient', '4096²', 65.7, 23.0, 35.0, 25.1, 11.0),
+        ('HDR albedo (half)', '2048²', 145.1, 25.2, 155.7, 13.1, 10.6),
     ],
 }
 
@@ -100,7 +100,7 @@ enc_rows = [(img, res, size, ms(cpu), ms(gpu)) for img, res, size, cpu, gpu in E
 enc_faster = [gpu < cpu for *_, cpu, gpu in ENCODE['rows']]
 table(ENCODE['columns'], enc_rows, enc_faster, os.path.join(HERE, 'benchmark-encode.svg'))
 
-# Decode compares the GPU against the parallel CPU decode
-dec_rows = [(img, res, ms(c1), ms(cp), ms(g), ms(gr)) for img, res, c1, cp, g, gr in DECODE['rows']]
-dec_faster = [g < cp for _, _, _, cp, g, _ in DECODE['rows']]
+# Decode compares the GPU against the parallel CPU decode of the same seekable file
+dec_rows = [(img, res, ms(c1), ms(cp), ms(pp), ms(g), ms(gr)) for img, res, c1, cp, pp, g, gr in DECODE['rows']]
+dec_faster = [g < cp for _, _, _, cp, _, g, _ in DECODE['rows']]
 table(DECODE['columns'], dec_rows, dec_faster, os.path.join(HERE, 'benchmark-decode.svg'))
