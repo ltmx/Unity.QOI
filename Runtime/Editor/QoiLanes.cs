@@ -291,6 +291,16 @@ namespace LTMX.QOI.Editor
             ? new LaneF { V = mm256_and_ps(x.V, mm256_set1_epi32(0x7FFFFFFF)) }
             : LaneF.Of(math.abs(x.Lo), math.abs(x.Hi));
 
+        // table[index] per lane
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe LaneI gather(int* table, LaneI index)
+        {
+            if (Avx2) return LaneI.Of(mm256_i32gather_epi32(table, index.V, 4));
+            int4 lo = index.Lo, hi = index.Hi;
+            return LaneI.Of(new int4(table[lo.x], table[lo.y], table[lo.z], table[lo.w]),
+                new int4(table[hi.x], table[hi.y], table[hi.z], table[hi.w]));
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool any(LaneB x) => Avx2 ? mm256_movemask_ps(x.V) != 0 : math.any(x.LoMask | x.HiMask);
 
