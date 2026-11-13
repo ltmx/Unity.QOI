@@ -16,7 +16,7 @@ namespace LTMX.QOI.Editor
     {
         private const int Threads = 32, MaxGroupsX = 65535;
         private const int OffLevel = 12668, TableHeader = OffLevel + 21 * 4 + 2 * 21 * 256 + 2 * 2 * 13 * 12 + 2 * 13 * 13;
-        private const int GridStride = 10, ModeStride = 10, PartStride = 6;
+        private const int GridStride = 10, ModeStride = 15, PartStride = 6;
 
         private static ComputeShader s_Shader;
         private static readonly Dictionary<int, (ComputeBuffer buffer, int gridOffset, int gridCount, int modeOffset, int modeCount, int partOffset, int partCount)>
@@ -68,7 +68,7 @@ namespace LTMX.QOI.Editor
         public sealed class Job
         {
             private readonly ComputeShader cs;
-            private readonly int kernel, hardKernel, levels;
+            private readonly int kernel, hardKernel, part3Kernel, levels;
             private readonly int[] widths, heights, pixelOffsets, blockOffsets;
             private ComputeBuffer pixelBuffer, blockBuffer, levelBuffer, hardBuffer;
 
@@ -96,6 +96,7 @@ namespace LTMX.QOI.Editor
                 cs = GetShader(blockSize);
                 kernel = cs.FindKernel("Encode" + blockSize);
                 hardKernel = cs.FindKernel("Hard" + blockSize);
+                part3Kernel = cs.FindKernel("Part3_" + blockSize);
                 pixelBuffer = new ComputeBuffer(pixelOffsets[levels], 4);
                 blockBuffer = new ComputeBuffer(blockOffsets[levels], 16);
                 levelBuffer = new ComputeBuffer(levels * 5, 4);
@@ -104,7 +105,7 @@ namespace LTMX.QOI.Editor
                 {
                     levelBuffer.SetData(levelData);
                     hardBuffer.SetData(new uint[1]);
-                    foreach (int k in new[] { kernel, hardKernel })
+                    foreach (int k in new[] { kernel, hardKernel, part3Kernel })
                     {
                         cs.SetBuffer(k, TablesId, tables.buffer);
                         cs.SetBuffer(k, PixelsId, pixelBuffer);
@@ -166,6 +167,8 @@ namespace LTMX.QOI.Editor
                     var hard = new uint[1];
                     hardBuffer.GetData(hard, 0, 0, 1);
                     Dispatch(hardKernel, 0, (int)hard[0]);
+                    // Pass 3: three partitions on those blocks
+                    if (!FastSearch) Dispatch(part3Kernel, 0, (int)hard[0]);
 
                     var result = new byte[(long)blockOffsets[levels] * 16];
                     blockBuffer.GetData(result);
@@ -232,6 +235,8 @@ namespace LTMX.QOI.Editor
             for (int i = 0; i < 2 * 13 * 12; i++) data.Add(BitConverter.SingleToInt32Bits(t->AxisF[i]));
             for (int i = 0; i < 2 * 13 * 13; i++) data.Add(BitConverter.SingleToInt32Bits(t->AxisInv[i]));
             if (data.Count != TableHeader) throw new InvalidOperationException("ASTC GPU table layout mismatch");
+            for (int i = 0; i < 12 * 32; i++) data.Add(t->WUp[i]);
+            for (int i = 0; i < 12 * 32; i++) data.Add(t->WDown[i]);
 
             int texels = t->Texels;
             int gridOffset = data.Count;
@@ -255,6 +260,8 @@ namespace LTMX.QOI.Editor
                 for (int i = 0; i < total; i++) data.Add(BitConverter.SingleToInt32Bits(grid->Weight[i]));
                 data[b + 8] = data.Count;
                 for (int i = 0; i < total; i++) data.Add(BitConverter.SingleToInt32Bits(grid->Step[i]));
+                data[b + 9] = data.Count;
+                for (int i = 0; i < total; i++) data.Add(BitConverter.SingleToInt32Bits(grid->Raw[i]));
             }
 
             // Modes grouped by grid, one plane before two (the shader reuses a grid's decimation errors)
@@ -272,6 +279,11 @@ namespace LTMX.QOI.Editor
                 data.Add(mode->Dual);
                 data.Add(mode->ColorLevel[8]);
                 data.Add(mode->ColorLevel[9]);
+                data.Add(mode->ColorLevel[2]);
+                data.Add(mode->ColorLevel[7]);
+                data.Add(mode->ColorLevel[13]);
+                data.Add(mode->ColorLevel[14]);
+                data.Add(mode->ColorLevel[12]);
             }
 
             // Two partition patterns: seed, texels of partition 1 (5 words, up to 144 texels)
@@ -281,6 +293,18 @@ namespace LTMX.QOI.Editor
                 data.Add(t->PartSeed2[j]);
                 ulong* mask = t->PartMask2 + (j * 2 + 1) * 3;
                 for (int w = 0; w < 5; w++) data.Add((int)(uint)(mask[w >> 1] >> (32 * (w & 1))));
+            }
+
+            // Three partition patterns after them: count, then seed, texels of partitions 1 and 2 (5 words each)
+            data.Add(t->PartCount3);
+            for (int j = 0; j < t->PartCount3; j++)
+            {
+                data.Add(t->PartSeed3[j]);
+                for (int k = 1; k < 3; k++)
+                {
+                    ulong* mask = t->PartMask3 + (j * 3 + k) * 3;
+                    for (int w = 0; w < 5; w++) data.Add((int)(uint)(mask[w >> 1] >> (32 * (w & 1))));
+                }
             }
 
             var buffer = new ComputeBuffer(data.Count, 4);

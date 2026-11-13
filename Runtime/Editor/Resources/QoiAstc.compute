@@ -17,6 +17,12 @@
 #pragma kernel Hard8 MAXT=64 MAXG=64 BW=8 HARD=1
 #pragma kernel Hard10 MAXT=100 MAXG=64 BW=10 HARD=1
 #pragma kernel Hard12 MAXT=144 MAXG=64 BW=12 HARD=1
+#pragma kernel Part3_4 MAXT=16 MAXG=16 BW=4 HARD=1 P3=1
+#pragma kernel Part3_5 MAXT=25 MAXG=25 BW=5 HARD=1 P3=1
+#pragma kernel Part3_6 MAXT=36 MAXG=36 BW=6 HARD=1 P3=1
+#pragma kernel Part3_8 MAXT=64 MAXG=64 BW=8 HARD=1 P3=1
+#pragma kernel Part3_10 MAXT=100 MAXG=64 BW=10 HARD=1 P3=1
+#pragma kernel Part3_12 MAXT=144 MAXG=64 BW=12 HARD=1 P3=1
 
 // Table layout (ints), as QoiAstcGpu writes it
 #pragma use_dxc
@@ -26,12 +32,14 @@
 
 // Pass 1 (Encode*) does the one partition one plane search and lists the blocks it fits poorly in _Hard (count at 0);
 // pass 2 (Hard*) encodes only those, fully: warps no longer wait on a few hard blocks.
+// Pass 3 (Part3_*) tries three partitions on them: its own kernel, the others would carry its registers.
 RWStructuredBuffer<uint> _Hard;
 
 static uint pxp[MAXT]; // texels, RGBA8 (packed: thread-local scratch is the bottleneck)
 static uint pm[(MAXT + 31) / 32]; // partition of each texel, one bit
 float4 Px(int i) { uint p = pxp[i]; return float4(p & 255, (p >> 8) & 255, (p >> 16) & 255, p >> 24); }
-int Part(int i) { return (int)((pm[i >> 5] >> (i & 31)) & 1); }
+static uint pm2[(MAXT + 31) / 32]; // second bit (three partitions)
+int Part(int i) { return (int)((pm[i >> 5] >> (i & 31)) & 1) | (int)((pm2[i >> 5] >> (i & 31)) & 1) << 1; }
 #if MAXT > 36
 // Texel weights, both planes as two halves in one uint: ideal (wp) and as decoded (twp). Big blocks only: thread-local
 // scratch is their bottleneck, small ones lose more to the conversions.
@@ -41,7 +49,7 @@ static float w1[MAXT], w2[MAXT], tw1[MAXT], tw2[MAXT];
 #endif
 static float gw[MAXG];             // grid weights (scratch)
 static uint codes[MAXG]; // weight codes, plane 1 in bits 0..7, plane 2 in 8..15
-static float cCnt[2], cLenP[2]; // texels and squared line extents of each partition
+static float cCnt[MAXP], cLenP[MAXP], cScaleErr; // texels, squared line extents of each partition; squared distances of the lines from black (RGB scale misfit)
 
 
 #if MAXT > 36
@@ -156,6 +164,7 @@ void Setup(int n)
     cM1 = cMask * (1 - cM2);
     cLen1 = 0;
     cLen2 = 0;
+    cScaleErr = 0;
     [loop] for (int k = 0; k < cP; k++)
     {
         float4 mean = 0, lo = 255, hi = 0;
@@ -186,6 +195,7 @@ void Setup(int n)
         if (dot(axis, axis) < 1e-12) axis = (hi - lo) * cM1;
         if (dot(axis, axis) < 1e-12) axis = cM1;
         axis = normalize(axis);
+        if (axis.x + axis.y + axis.z < 0) axis = -axis; // second endpoint the brighter (RGB scale, partition order)
         float tmin = 1e9, tmax = -1e9;
         [loop] for (int i3 = 0; i3 < n; i3++)
         {
@@ -204,6 +214,8 @@ void Setup(int n)
             SetW(0, i4, (W(0, i4) - tmin) * scale);
             SetW(1, i4, (dot(Px(i4), cM2) - l2) * inv2);
         }
+        float3 perp = mean.xyz - axis.xyz * dot(mean.xyz, axis.xyz);
+        cScaleErr += dot(perp, perp) * cnt;
         cCnt[k] = cnt;
         cLenP[k] = (tmax - tmin) * (tmax - tmin) + (h2 - l2) * (h2 - l2);
         cLen1 += (tmax - tmin) * (tmax - tmin) * cnt / n;
@@ -243,6 +255,203 @@ void LeastSquares(int k, int n, out float4 a, out float4 b)
     b = clamp(b, 0, 255) * cMask;
 }
 
+// ---- Weight realign ----
+
+// Texel weight of grid g's plane as the decoder infills the grid values in gw (0..64), scaled to 0..1
+float Infill(int index, int i)
+{
+    int s = 8;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        int v = T(index + i * 4 + k);
+        s += (int)gw[v & 255] * (v >> 8);
+    }
+    return (s >> 4) * (1.0 / 64);
+}
+
+// Each grid weight of a plane tried a step up and down for the quantized endpoints, kept when it lowers the error
+// (error change of a step x: 2 x r.d + x² d.d, residuals r of the current weights). Decimated grids only.
+void Realign(int g, int level, int n, int plane, float4 e0[MAXP], float4 e1[MAXP])
+{
+    int base = _GridOffset + g * GRID_STRIDE;
+    int count = T(base + 2), index = T(base + 4), start = T(base + 5), texel = T(base + 6), raw = T(base + 9);
+    int sh = plane * 8;
+    float4 pmask = plane != 0 ? cM2 : cM1;
+    [loop] for (int j = 0; j < count; j++) gw[j] = T(OFF_WU + level * 32 + ((codes[j] >> sh) & 255));
+    [loop] for (int j2 = 0; j2 < count; j2++)
+    {
+        float rd = 0, dd = 0;
+        int e = T(start + j2 + 1);
+        [loop] for (int c = T(start + j2); c < e; c++)
+        {
+            int i = T(texel + c);
+            float f = TF(raw + c);
+            int k = Part(i);
+            float4 o = e0[k], d = e1[k] - o;
+            float4 t = lerp(TW(1 - plane, i), Infill(index, i), pmask);
+            float4 r = (o + d * t - Px(i)) * cMask, dp = d * pmask;
+            rd += dot(r, dp) * f;
+            dd += dot(dp, dp) * f * f;
+        }
+        int code = (codes[j2] >> sh) & 255, wb = level * 32;
+        int up = T(OFF_WUP + wb + code), down = T(OFF_WDOWN + wb + code);
+        float xu = (T(OFF_WU + wb + up) - gw[j2]) * (1.0 / 64), xd = (T(OFF_WU + wb + down) - gw[j2]) * (1.0 / 64);
+        float cu = (2 * rd + xu * dd) * xu, cd = (2 * rd + xd * dd) * xd;
+        bool vu = up != code && cu < 0, vd = down != code && cd < (vu ? cu : 0);
+        if (!vu && !vd) continue;
+        int nc = vd ? down : up;
+        codes[j2] = (codes[j2] & ~(255u << sh)) | ((uint)nc << sh);
+        gw[j2] = T(OFF_WU + wb + nc);
+    }
+    [loop] for (int i2 = 0; i2 < n; i2++) SetTW(plane, i2, Infill(index, i2));
+}
+
+// Endpoints of every partition for the texel weights: base + offset when the partition's are close, else direct.
+// Returns the partitions on base + offset (bit k); without mixed (modes may differ by partition), all or none.
+int Endpoints(int cl, int n, bool mixed, out int4 k0[MAXP], out int4 k1[MAXP], out float4 e0[MAXP], out float4 e1[MAXP])
+{
+    float4 a[MAXP], b[MAXP];
+    bool near[MAXP];
+    [unroll] for (int k = 0; k < MAXP; k++)
+    {
+        a[k] = 0;
+        b[k] = 0;
+        e0[k] = 0;
+        e1[k] = 0;
+        k0[k] = 0;
+        k1[k] = 0;
+        near[k] = false;
+        if (k < cP)
+        {
+            LeastSquares(k, n, a[k], b[k]);
+            float4 d = (b[k] - a[k]) * cMask;
+            near[k] = all(d <= 31 && d >= -32) && d.x + d.y + d.z >= 0;
+        }
+    }
+    bool all2 = near[0] && (cP < 2 || near[1]);
+    int mask = 0;
+    [unroll] for (int k2 = 0; k2 < MAXP; k2++)
+        if (k2 < cP && (mixed ? near[k2] : all2) && QuantizeOffsets(cl, a[k2], b[k2], k0[k2], k1[k2], e0[k2], e1[k2]))
+            mask |= 1 << k2;
+    if (!mixed && mask != (1 << cP) - 1) mask = 0;
+    [unroll] for (int k3 = 0; k3 < MAXP; k3++)
+        if (k3 < cP && (mask & (1 << k3)) == 0) QuantizeEndpoints(cl, a[k3], b[k3], cP > 1, k0[k3], k1[k3], e0[k3], e1[k3]);
+    return mask;
+}
+
+// Color levels of the mode at base for the config: direct / offset endpoints, RGB scale
+int ClD(int base) { return T(base + (cP == 1 ? 4 : cP == 2 ? 8 : 12) + (cAlpha ? 1 : 0)); }
+int ClS(int base) { return cAlpha ? T(base + (cP == 1 ? 4 : cP == 2 ? 8 : 12)) : T(base + (cP == 1 ? 10 : cP == 2 ? 11 : 14)); }
+
+// Bits of count color values at a level
+int IseBits(int count, int level)
+{
+    int b = T(OFF_LEVEL + level * 4), t = T(OFF_LEVEL + level * 4 + 1), q = T(OFF_LEVEL + level * 4 + 2);
+    return count * b + (t != 0 ? (count * 8 + 4) / 5 : q != 0 ? (count * 7 + 2) / 3 : 0);
+}
+
+// RGB scale endpoints (modes 6 and 10): second endpoint B, first B * s / 256, alpha direct. B and s least squares for
+// the texel weights (each texel B * (s + (1 - s) w)). Codes: k0 = B, s; k1 = alpha pair.
+void Scale(int cl, int n, out int4 k0[MAXP], out int4 k1[MAXP], out float4 e0[MAXP], out float4 e1[MAXP])
+{
+    int q = OFF_CQ + cl * 256, u = OFF_CU + cl * 256;
+    [unroll] for (int k = 0; k < MAXP; k++)
+    {
+        k0[k] = 0;
+        k1[k] = 0;
+        e0[k] = 0;
+        e1[k] = 0;
+        if (k >= cP) continue;
+        float4 a, b;
+        LeastSquares(k, n, a, b);
+        float s = saturate(dot(a.xyz, b.xyz) / max(dot(b.xyz, b.xyz), 1));
+        float3 sfp = 0, sff = 0;
+        [loop] for (int i = 0; i < n; i++)
+        {
+            if (Part(i) != k) continue;
+            float3 f = s + (1 - s) * lerp(TW1(i), TW2(i), cM2.xyz);
+            sfp += f * Px(i).xyz;
+            sff += f * f;
+        }
+        float3 B = clamp(sfp / max(sff, 1e-6), 0, 255);
+        float num = 0, den = 0;
+        [loop] for (int i2 = 0; i2 < n; i2++)
+        {
+            if (Part(i2) != k) continue;
+            float3 t = lerp(TW1(i2), TW2(i2), cM2.xyz), r = B * (1 - t);
+            num += dot(Px(i2).xyz - B * t, r);
+            den += dot(r, r);
+        }
+        s = den > 0 ? saturate(num / den) : 1;
+        int3 kb = int3(T(q + (int)(B.x + 0.5)), T(q + (int)(B.y + 0.5)), T(q + (int)(B.z + 0.5)));
+        int ks = T(q + min((int)(s * 256 + 0.5), 255));
+        int3 bq = int3(T(u + kb.x), T(u + kb.y), T(u + kb.z));
+        int sq = T(u + ks);
+        k0[k] = int4(kb, ks);
+        e1[k] = float4(bq, 255);
+        e0[k] = float4((bq * sq) >> 8, 255);
+        if (cAlpha)
+        {
+            k1[k] = int4(T(q + (int)(a.w + 0.5)), T(q + (int)(b.w + 0.5)), 0, 0);
+            e0[k].w = T(u + k1[k].x);
+            e1[k].w = T(u + k1[k].y);
+        }
+    }
+}
+
+// Error of the decoded texels (16 bit expansion, weight interpolation, top 8 bits), per channel
+float4 DecodedError(int n, float4 e0[MAXP], float4 e1[MAXP])
+{
+    float4 err = 0;
+    [loop] for (int i = 0; i < n; i++)
+    {
+        float4 c0 = e0[Part(i)], c1 = e1[Part(i)];
+        float4 t = lerp(TW1(i), TW2(i), cM2) * 64;
+        float4 c = floor((c0 * 257 * (64 - t) + c1 * 257 * t + 32) / 64);
+        float4 d = (floor(c / 256) - Px(i)) * cMask;
+        err += d * d;
+    }
+    return err;
+}
+
+float Sum(float4 v) { return v.x + v.y + v.z + v.w; }
+
+// Best endpoints (kind: base + offset partitions, or 4 RGB scale) of the direct / offset (level clD) and scale (level clS) encodings, level < 0 when unavailable
+int BestEndpoints(int clD, int clS, bool mixed, int n, out int4 k0[MAXP], out int4 k1[MAXP], out float4 e0[MAXP], out float4 e1[MAXP], out float4 err)
+{
+    int kind = -1;
+    err = 1e30;
+    [unroll] for (int k = 0; k < MAXP; k++)
+    {
+        k0[k] = 0;
+        k1[k] = 0;
+        e0[k] = 0;
+        e1[k] = 0;
+    }
+    if (clD >= 0)
+    {
+        kind = Endpoints(clD, n, mixed, k0, k1, e0, e1);
+        err = DecodedError(n, e0, e1);
+    }
+    if (clS >= 0)
+    {
+        int4 sk0[MAXP], sk1[MAXP];
+        float4 se0[MAXP], se1[MAXP];
+        Scale(clS, n, sk0, sk1, se0, se1);
+        float4 serr = DecodedError(n, se0, se1);
+        if (Sum(serr) < Sum(err))
+        {
+            kind = 4;
+            err = serr;
+            k0 = sk0;
+            k1 = sk1;
+            e0 = se0;
+            e1 = se1;
+        }
+    }
+    return kind;
+}
+
 // ---- Fit ----
 
 void Fit(int m, int n)
@@ -250,39 +459,27 @@ void Fit(int m, int n)
     int base = _ModeOffset + m * MODE_STRIDE;
     int g = T(base), level = T(base + 1);
     bool dual = T(base + 7) != 0;
-    int cl = T(base + (cP == 1 ? 4 : 8) + (cAlpha ? 1 : 0));
+    int clD = ClD(base), clS = ClS(base);
     int count = T(_GridOffset + g * GRID_STRIDE + 2);
+    // Base + offset by partition: two more mode bits
+    bool mixed = cP == 2 && clD >= 0 && 128 - 29 - T(base + 3) - (dual ? 2 : 0) - 2 >= IseBits((cAlpha ? 8 : 6) * cP, clD);
     Weights(g, level, n, dual);
     if (!dual) [loop] for (int i = 0; i < n; i++) CopyTW12(i);
     [loop] for (int it = 0; it < PASSES; it++)
     {
-        float4 e0[2], e1[2];
-        int4 k0[2], k1[2];
-        [unroll] for (int k = 0; k < 2; k++)
+        float4 e0[MAXP], e1[MAXP];
+        int4 k0[MAXP], k1[MAXP];
+        float4 err;
+        int kind = BestEndpoints(clD, clS, mixed, n, k0, k1, e0, e1, err);
+        if (it == PASSES - 1 && T(_GridOffset + g * GRID_STRIDE + 3) == 0)
         {
-            e0[k] = 0;
-            e1[k] = 0;
-            k0[k] = 0;
-            k1[k] = 0;
-            if (k < cP)
-            {
-                float4 a, b;
-                LeastSquares(k, n, a, b);
-                QuantizeEndpoints(cl, a, b, cP > 1, k0[k], k1[k], e0[k], e1[k]);
-            }
+            Realign(g, level, n, 0, e0, e1);
+            if (dual) Realign(g, level, n, 1, e0, e1);
+            else [loop] for (int i0 = 0; i0 < n; i0++) CopyTW12(i0);
+            // Endpoints fitted again to the realigned weights
+            kind = BestEndpoints(clD, clS, mixed, n, k0, k1, e0, e1, err);
         }
-
-        // Decoded texels: 16 bit expansion, weight interpolation, top 8 bits
-        float4 err = 0;
-        [loop] for (int i = 0; i < n; i++)
-        {
-            float4 c0 = Part(i) != 0 ? e0[1] : e0[0], c1 = Part(i) != 0 ? e1[1] : e1[0];
-            float4 t = lerp(TW1(i), TW2(i), cM2) * 64;
-            float4 c = floor((c0 * 257 * (64 - t) + c1 * 257 * t + 32) / 64);
-            float4 d = (floor(c / 256) - Px(i)) * cMask;
-            err += d * d;
-        }
-        float total = err.x + err.y + err.z + err.w;
+        float total = Sum(err);
         if (total < bErr)
         {
             bErr = total;
@@ -291,11 +488,14 @@ void Fit(int m, int n)
             bP = cP;
             bSeed = cSeed;
             bC2 = dual ? cC2 : -1;
-            [unroll] for (int k2 = 0; k2 < 2; k2++)
+            bKind = kind;
+            bCl = kind == 4 ? clS : clD;
+            [unroll] for (int k2 = 0; k2 < MAXP; k2++)
             [unroll] for (int c = 0; c < 4; c++)
             {
-                bk[k2 * 8 + 2 * c] = k0[k2][c];
-                bk[k2 * 8 + 2 * c + 1] = k1[k2][c];
+                // Scale: B, s, then alpha pair; else first and second code of each channel
+                bk[k2 * 8 + 2 * c] = kind == 4 ? (c < 2 ? k0[k2][2 * c] : k1[k2][2 * c - 4]) : k0[k2][c];
+                bk[k2 * 8 + 2 * c + 1] = kind == 4 ? (c < 2 ? k0[k2][2 * c + 1] : k1[k2][2 * c - 3]) : k1[k2][c];
             }
             [loop] for (int j = 0; j < count; j++)
             {
@@ -305,9 +505,9 @@ void Fit(int m, int n)
         if (it == PASSES - 1) break;
 
         // Weights reprojected on the quantized endpoints: plane 1 along each partition's line, plane 2 its channel's range
-        float4 sc[2];
-        float inv2[2];
-        [unroll] for (int k3 = 0; k3 < 2; k3++)
+        float4 sc[MAXP];
+        float inv2[MAXP];
+        [unroll] for (int k3 = 0; k3 < MAXP; k3++)
         {
             float4 d = (e1[k3] - e0[k3]) * cM1;
             float dd = dot(d, d);
@@ -318,9 +518,9 @@ void Fit(int m, int n)
         [loop] for (int i2 = 0; i2 < n; i2++)
         {
             int k4 = Part(i2);
-            float4 o = k4 != 0 ? e0[1] : e0[0];
-            SetW(0, i2, saturate(dot(Px(i2) - o, k4 != 0 ? sc[1] : sc[0])));
-            SetW(1, i2, saturate(dot(Px(i2) - o, cM2) * (k4 != 0 ? inv2[1] : inv2[0])));
+            float4 o = e0[k4];
+            SetW(0, i2, saturate(dot(Px(i2) - o, sc[k4])));
+            SetW(1, i2, saturate(dot(Px(i2) - o, cM2) * inv2[k4]));
         }
         Weights(g, level, n, dual);
         if (!dual) [loop] for (int i3 = 0; i3 < n; i3++) CopyTW12(i3);
@@ -364,7 +564,7 @@ float AxisError(int axis, int g, int plane)
         {
             int i = i0 + x2 * di, j6 = T(tj + x2);
             float d = gwl[j6] + (gwl[j6 + 1] - gwl[j6]) * TF(tf + x2) - W(plane, i);
-            total += d * d * (Part(i) != 0 ? cLenP[1] : cLenP[0]);
+            total += d * d * cLenP[Part(i)];
         }
     }
     return total;
@@ -394,16 +594,19 @@ void Search(int n, int candidates)
         }
         ax[a] = e;
     }
-    float length = cCnt[0] * cLenP[0] + (cP > 1 ? cCnt[1] * cLenP[1] : 0), channels = cAlpha ? 4 : 3;
+    float length = cCnt[0] * cLenP[0] + (cP > 1 ? cCnt[1] * cLenP[1] : 0) + (cP > 2 ? cCnt[2] * cLenP[2] : 0), channels = cAlpha ? 4 : 3;
     [loop] for (int m = 0; m < _ModeCount; m++)
     {
         int base = _ModeOffset + m * MODE_STRIDE;
         if ((T(base + 7) != 0) != dual) continue;
-        int cl = T(base + (cP == 1 ? 4 : 8) + (cAlpha ? 1 : 0));
+        int cl = ClD(base);
+        float misfit = 0;
+        if (cl < 0) misfit = cScaleErr;
+        if (cl < 0) cl = ClS(base);
         if (cl < 0) continue;
         int gb = _GridOffset + T(base) * GRID_STRIDE;
         float cr = 255.0 / (T(OFF_LEVEL + cl * 4 + 3) - 1);
-        float est = length * TF(base + 6) + channels * n * cr * cr / 18 + ax[T(gb)] + ax[13 + T(gb + 1)];
+        float est = length * TF(base + 6) + channels * n * cr * cr / 18 + ax[T(gb)] + ax[13 + T(gb + 1)] + misfit;
         if (est >= candErr[candidates - 1]) continue;
         int k2 = candidates - 1;
         [loop] while (k2 > 0 && candErr[k2 - 1] > est)
@@ -420,6 +623,40 @@ void Search(int n, int candidates)
         if (cand[c] < 0) break;
         Fit(cand[c], n);
     }
+}
+
+// Squared error of the two partitions (pm) to their principal axis lines
+float LineError(int n)
+{
+    float total = 0;
+    [unroll] for (int k = 0; k < MAXP; k++)
+    {
+        float4 sp = 0;
+        float4x4 spp = 0;
+        float cnt = 0;
+        [loop] for (int i = 0; i < n; i++)
+        {
+            if (Part(i) != k) continue;
+            float4 p = Px(i) * cMask;
+            sp += p;
+            spp += float4x4(p * p.x, p * p.y, p * p.z, p * p.w);
+            cnt += 1;
+        }
+        if (cnt == 0) continue;
+        float4 mean = sp / cnt;
+        float4x4 cov = spp - cnt * float4x4(mean * mean.x, mean * mean.y, mean * mean.z, mean * mean.w);
+        float4 axis = float4(cov[0][0], cov[1][1], cov[2][2], cov[3][3]) + 1e-3;
+        [unroll] for (int it = 0; it < 4; it++)
+        {
+            axis = mul(cov, axis);
+            float m = max(max(abs(axis.x), abs(axis.y)), max(abs(axis.z), abs(axis.w)));
+            if (m > 0) axis /= m;
+        }
+        float a2 = dot(axis, axis);
+        float along = a2 > 0 ? dot(axis, mul(cov, axis)) / a2 : 0;
+        total += cov[0][0] + cov[1][1] + cov[2][2] + cov[3][3] - along;
+    }
+    return total;
 }
 
 // ---- Kernel ----
@@ -458,14 +695,13 @@ void EncodeBlock(uint id)
     }
     cAlpha = mn.w < 255;
     cMask = cAlpha ? 1 : float4(1, 1, 1, 0);
-    int values = cAlpha ? 8 : 6, cem = cAlpha ? 12 : 8;
     bMode = -1;
 #if HARD
     // Resume from pass 1: its block stays unless something below beats its error
     uint h = 1 + id * 5;
     bErr = asfloat(_Hard[h + 1]);
     float4 lineErr = float4(asfloat(_Hard[h + 2]), asfloat(_Hard[h + 3]), asfloat(_Hard[h + 4]), 0);
-    [unroll] for (int w = 0; w < (MAXT + 31) / 32; w++) pm[w] = 0;
+    [unroll] for (int w = 0; w < (MAXT + 31) / 32; w++) pm[w] = pm2[w] = 0;
     cP = 1;
     cSeed = 0;
     cC2 = -1;
@@ -473,7 +709,7 @@ void EncodeBlock(uint id)
     bErr = 1e30;
 
     // One partition, one plane
-    [unroll] for (int w = 0; w < (MAXT + 31) / 32; w++) pm[w] = 0;
+    [unroll] for (int w = 0; w < (MAXT + 31) / 32; w++) pm[w] = pm2[w] = 0;
     cP = 1;
     cSeed = 0;
     cC2 = -1;
@@ -481,7 +717,7 @@ void EncodeBlock(uint id)
     float4 lineErr = bChErr;
     if (bErr > EARLY_OUT * n)
     {
-        _Blocks[dst] = bMode < 0 ? VoidExtent(round((mn + mx) * 0.5)) : Pack(values, cem);
+        _Blocks[dst] = bMode < 0 ? VoidExtent(round((mn + mx) * 0.5)) : Pack();
         uint k;
         InterlockedAdd(_Hard[0], 1, k);
         uint h = 1 + k * 5;
@@ -494,6 +730,7 @@ void EncodeBlock(uint id)
     }
 #endif
 
+#if !P3
     // One partition, a channel on its own plane: alpha, or the color channels the line fits worst
     if (bErr > EARLY_OUT * n)
     {
@@ -520,7 +757,7 @@ void EncodeBlock(uint id)
         cC2 = -1;
         cP = 1;
         Setup(n);
-        [unroll] for (int w0 = 0; w0 < (MAXT + 31) / 32; w0++) pm[w0] = 0;
+        [unroll] for (int w0 = 0; w0 < (MAXT + 31) / 32; w0++) pm[w0] = pm2[w0] = 0;
         [loop] for (int i2 = 0; i2 < n; i2++) if (W(0, i2) >= 0.5) pm[i2 >> 5] |= 1u << (i2 & 31);
         [loop] for (int it = 0; it < 2; it++)
         {
@@ -542,9 +779,9 @@ void EncodeBlock(uint id)
         }
         uint label[5] = { 0, 0, 0, 0, 0 };
         [unroll] for (int i5 = 0; i5 < (MAXT + 31) / 32; i5++) label[i5] = pm[i5];
-        int pc[PART_CANDIDATES];
-        int pe[PART_CANDIDATES];
-        [unroll] for (int k = 0; k < PART_CANDIDATES; k++)
+        int pc[PART_SCREEN];
+        int pe[PART_SCREEN];
+        [unroll] for (int k = 0; k < PART_SCREEN; k++)
         {
             pc[k] = -1;
             pe[k] = 1000;
@@ -555,8 +792,8 @@ void EncodeBlock(uint id)
             int x = 0;
             [unroll] for (int wd = 0; wd < 5; wd++) x += countbits(label[wd] ^ (uint)T(b + 1 + wd));
             x = min(x, n - x);
-            if (x >= pe[PART_CANDIDATES - 1]) continue;
-            int k2 = PART_CANDIDATES - 1;
+            if (x >= pe[PART_SCREEN - 1]) continue;
+            int k2 = PART_SCREEN - 1;
             [loop] while (k2 > 0 && pe[k2 - 1] > x)
             {
                 pe[k2] = pe[k2 - 1];
@@ -566,16 +803,166 @@ void EncodeBlock(uint id)
             pe[k2] = x;
             pc[k2] = j;
         }
+        // Screened patterns ranked by the error of each partition's line (variance off its principal axis)
+        float le[PART_SCREEN];
+        [loop] for (int k6 = 0; k6 < PART_SCREEN; k6++)
+        {
+            le[k6] = 1e30;
+            if (pc[k6] < 0) continue;
+            int b6 = _PartOffset + pc[k6] * PART_STRIDE;
+            [unroll] for (int i7 = 0; i7 < (MAXT + 31) / 32; i7++) pm[i7] = T(b6 + 1 + i7);
+            le[k6] = LineError(n);
+        }
         [loop] for (int k3 = 0; k3 < PART_CANDIDATES; k3++)
         {
-            if (pc[k3] < 0) break;
-            int b = _PartOffset + pc[k3] * PART_STRIDE;
+            int bi = -1;
+            float bl = 1e30;
+            [loop] for (int k7 = 0; k7 < PART_SCREEN; k7++)
+                if (le[k7] < bl)
+                {
+                    bl = le[k7];
+                    bi = k7;
+                }
+            if (bi < 0) break;
+            le[bi] = 1e30;
+            int b = _PartOffset + pc[bi] * PART_STRIDE;
             [unroll] for (int i6 = 0; i6 < (MAXT + 31) / 32; i6++) pm[i6] = T(b + 1 + i6);
             cP = 2;
             cSeed = T(b);
             Search(n, OTHER_CANDIDATES);
         }
     }
+
+#endif
+#if P3
+    // Three partitions: patterns closest to a 3-means clustering (thirds of the first line, then 2 iterations), matched
+    // under every relabeling, the closest ranked by line errors
+    int p3 = _PartOffset + _PartCount * PART_STRIDE, count3 = PART3_CANDIDATES > 0 ? T(p3) : 0;
+    if (bErr > EARLY_OUT * n && count3 > 0)
+    {
+        cC2 = -1;
+        cP = 1;
+        [unroll] for (int w0 = 0; w0 < (MAXT + 31) / 32; w0++) pm[w0] = pm2[w0] = 0;
+        Setup(n);
+        [loop] for (int i2 = 0; i2 < n; i2++)
+        {
+            float t = W(0, i2);
+            if (t >= 2.0 / 3) pm2[i2 >> 5] |= 1u << (i2 & 31);
+            else if (t >= 1.0 / 3) pm[i2 >> 5] |= 1u << (i2 & 31);
+        }
+        [loop] for (int it = 0; it < 2; it++)
+        {
+            float4 cs[3] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            float cn[3] = { 0, 0, 0 };
+            [loop] for (int i3 = 0; i3 < n; i3++)
+            {
+                int k = Part(i3);
+                cs[k] += Px(i3) * cMask;
+                cn[k] += 1;
+            }
+            [unroll] for (int k1 = 0; k1 < 3; k1++) cs[k1] /= max(cn[k1], 1);
+            [unroll] for (int w1 = 0; w1 < (MAXT + 31) / 32; w1++) pm[w1] = pm2[w1] = 0;
+            [loop] for (int i4 = 0; i4 < n; i4++)
+            {
+                float4 p = Px(i4) * cMask, d0 = p - cs[0], d1 = p - cs[1], d2 = p - cs[2];
+                float e0 = dot(d0, d0), e1 = dot(d1, d1), e2 = dot(d2, d2);
+                if (e2 < e0 && e2 < e1) pm2[i4 >> 5] |= 1u << (i4 & 31);
+                else if (e1 < e0) pm[i4 >> 5] |= 1u << (i4 & 31);
+            }
+        }
+        uint l0[5], l1[5], l2[5];
+        [unroll] for (int w2 = 0; w2 < 5; w2++)
+        {
+            int bits = clamp(n - 32 * w2, 0, 32);
+            uint valid = bits >= 32 ? 0xFFFFFFFFu : (1u << bits) - 1;
+            l1[w2] = w2 < (MAXT + 31) / 32 ? pm[w2] : 0;
+            l2[w2] = w2 < (MAXT + 31) / 32 ? pm2[w2] : 0;
+            l0[w2] = ~(l1[w2] | l2[w2]) & valid;
+        }
+        int n0 = 0, n1 = 0, n2 = 0;
+        [unroll] for (int w3 = 0; w3 < 5; w3++)
+        {
+            n0 += countbits(l0[w3]);
+            n1 += countbits(l1[w3]);
+            n2 += countbits(l2[w3]);
+        }
+        int pc[PART3_SCREEN];
+        int pe[PART3_SCREEN];
+        [unroll] for (int k2 = 0; k2 < PART3_SCREEN; k2++)
+        {
+            pc[k2] = -1;
+            pe[k2] = 1000;
+        }
+        [loop] for (int j = 0; j < count3; j++)
+        {
+            int b = p3 + 1 + j * PART3_STRIDE;
+            int o[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            [unroll] for (int wd = 0; wd < 5; wd++)
+            {
+                uint m1 = (uint)T(b + 1 + wd), m2 = (uint)T(b + 6 + wd);
+                o[1] += countbits(l0[wd] & m1);
+                o[2] += countbits(l0[wd] & m2);
+                o[4] += countbits(l1[wd] & m1);
+                o[5] += countbits(l1[wd] & m2);
+                o[7] += countbits(l2[wd] & m1);
+                o[8] += countbits(l2[wd] & m2);
+            }
+            // Partition 0 overlaps: what the label's texels leave to partitions 1 and 2
+            o[0] = n0 - o[1] - o[2];
+            o[3] = n1 - o[4] - o[5];
+            o[6] = n2 - o[7] - o[8];
+            int agree = max(max(max(o[0] + o[4] + o[8], o[0] + o[5] + o[7]), max(o[1] + o[3] + o[8], o[1] + o[5] + o[6])),
+                max(o[2] + o[3] + o[7], o[2] + o[4] + o[6]));
+            int x = n - agree;
+            if (x >= pe[PART3_SCREEN - 1]) continue;
+            int k3 = PART3_SCREEN - 1;
+            [loop] while (k3 > 0 && pe[k3 - 1] > x)
+            {
+                pe[k3] = pe[k3 - 1];
+                pc[k3] = pc[k3 - 1];
+                k3--;
+            }
+            pe[k3] = x;
+            pc[k3] = j;
+        }
+        float le[PART3_SCREEN];
+        [loop] for (int k4 = 0; k4 < PART3_SCREEN; k4++)
+        {
+            le[k4] = 1e30;
+            if (pc[k4] < 0) continue;
+            int b4 = p3 + 1 + pc[k4] * PART3_STRIDE;
+            [unroll] for (int i5 = 0; i5 < (MAXT + 31) / 32; i5++)
+            {
+                pm[i5] = T(b4 + 1 + i5);
+                pm2[i5] = T(b4 + 6 + i5);
+            }
+            le[k4] = LineError(n);
+        }
+        [loop] for (int k5 = 0; k5 < PART3_CANDIDATES; k5++)
+        {
+            int bi = -1;
+            float bl = 1e30;
+            [loop] for (int k6 = 0; k6 < PART3_SCREEN; k6++)
+                if (le[k6] < bl)
+                {
+                    bl = le[k6];
+                    bi = k6;
+                }
+            if (bi < 0) break;
+            le[bi] = 1e30;
+            int b5 = p3 + 1 + pc[bi] * PART3_STRIDE;
+            [unroll] for (int i6 = 0; i6 < (MAXT + 31) / 32; i6++)
+            {
+                pm[i6] = T(b5 + 1 + i6);
+                pm2[i6] = T(b5 + 6 + i6);
+            }
+            cP = 3;
+            cSeed = T(b5);
+            Search(n, OTHER_CANDIDATES);
+        }
+    }
+
+#endif
 
     if (bMode < 0)
     {
@@ -585,7 +972,10 @@ void EncodeBlock(uint id)
         _Blocks[dst] = VoidExtent(round((mn + mx) * 0.5));
         return;
     }
-    _Blocks[dst] = Pack(values, cem);
+#if HARD
+    _Hard[h + 1] = asuint(bErr); // for the next pass
+#endif
+    _Blocks[dst] = Pack();
 }
 
 #define KERNEL(name) [numthreads(32, 1, 1)] void name(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) \
@@ -603,3 +993,9 @@ KERNEL(Hard6)
 KERNEL(Hard8)
 KERNEL(Hard10)
 KERNEL(Hard12)
+KERNEL(Part3_4)
+KERNEL(Part3_5)
+KERNEL(Part3_6)
+KERNEL(Part3_8)
+KERNEL(Part3_10)
+KERNEL(Part3_12)
