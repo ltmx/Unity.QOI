@@ -124,14 +124,19 @@ namespace LTMX.QOI.Editor
                 targetHeight = Math.Max(1, Math.Min(maxSize, (int)Math.Round(targetHeight * scale)));
             }
 
-            pixels = Resize(pixels, width, height, targetWidth, targetHeight, channels, sampleFormat);
+            bool linear = IsLinear(img);
+            bool compressed = TryGetCompressedFormat(img, targetWidth, targetHeight, out var compressedFormat);
+            bool fast = compressed && UseFastCompressor(img, compressedFormat);
+
+            // HDR source to an 8-bit format the fast compressor handles: samples clamped to bytes with the resize
+            var outFormat = fast ? QoiSampleFormat.Byte : sampleFormat;
+            if (targetWidth != width || targetHeight != height || outFormat != sampleFormat)
+                pixels = QoiResize.Resize(pixels, width, height, targetWidth, targetHeight, channels, sampleFormat, outFormat);
             width = targetWidth;
             height = targetHeight;
 
-            bool linear = IsLinear(img);
-            bool compressed = TryGetCompressedFormat(img, width, height, out var compressedFormat);
             Texture2D tex;
-            if (compressed && UseFastCompressor(img, compressedFormat))
+            if (fast)
             {
                 tex = QoiFastCompressor.CreateTexture2D(pixels, channels, width, height, compressedFormat, mipMapEnabled, linear,
                     textureType == TextureImporterType.NormalMap);
@@ -176,8 +181,9 @@ namespace LTMX.QOI.Editor
         }
 
         // The fast compressor handles 8-bit images in the formats it supports, crunch excepted
+        // (8-bit formats only, so HDR images are converted to bytes first)
         private bool UseFastCompressor(QoiImage img, TextureFormat compressedFormat) =>
-            _settings.compressor == QoiCompressor.Fast && img.SampleFormat == QoiSampleFormat.Byte && QoiFastCompressor.Supports(compressedFormat);
+            _settings.compressor == QoiCompressor.Fast && QoiFastCompressor.Supports(compressedFormat);
 
         private static bool IsMobile(BuildTargetGroup group) => group is BuildTargetGroup.Android or BuildTargetGroup.iOS;
 
@@ -307,7 +313,8 @@ namespace LTMX.QOI.Editor
             if (compressed && UseFastCompressor(img, compressedFormat))
             {
                 var faces = new byte[6][];
-                for (int f = 0; f < 6; f++) faces[f] = BuildFace(img, layout, f, faceSize);
+                for (int f = 0; f < 6; f++) faces[f] = QoiResize.Resize(BuildFace(img, layout, f, faceSize), faceSize, faceSize, faceSize, faceSize,
+                    img.PixelChannels == 3 ? 4 : img.PixelChannels, img.SampleFormat, QoiSampleFormat.Byte);
                 var fast = QoiFastCompressor.CreateCubemap(faces, img.PixelChannels == 3 ? 4 : img.PixelChannels, faceSize,
                     compressedFormat, mipMapEnabled, IsLinear(img));
                 fast.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
@@ -465,88 +472,6 @@ namespace LTMX.QOI.Editor
                 TextureImporterNPOTScale.ToSmaller => smaller,
                 _ => size - smaller < larger - size ? smaller : larger // ToNearest, ties go up
             };
-        }
-
-        /// Separable tent filter resize. The filter widens when shrinking so every source pixel contributes.
-        private static byte[] Resize(byte[] src, int srcWidth, int srcHeight, int dstWidth, int dstHeight, int channels, QoiSampleFormat format)
-        {
-            if (srcWidth == dstWidth && srcHeight == dstHeight) return src;
-
-            var (xStart, xWeights) = Weights(srcWidth, dstWidth);
-            var (yStart, yWeights) = Weights(srcHeight, dstHeight);
-            var halfs = format == QoiSampleFormat.Half ? MemoryMarshal.Cast<byte, ushort>(src.AsSpan()).ToArray() : null;
-            var floats = format == QoiSampleFormat.Float ? MemoryMarshal.Cast<byte, float>(src.AsSpan()).ToArray() : null;
-
-            float Sample(int i) => format switch
-            {
-                QoiSampleFormat.Half => Mathf.HalfToFloat(halfs[i]),
-                QoiSampleFormat.Float => floats[i],
-                _ => src[i]
-            };
-
-            // Horizontal pass into a float buffer of dstWidth x srcHeight
-            var tmp = new float[dstWidth * srcHeight * channels];
-            for (int y = 0; y < srcHeight; y++)
-            for (int x = 0; x < dstWidth; x++)
-            {
-                var w = xWeights[x];
-                int o = (y * dstWidth + x) * channels;
-                for (int k = 0; k < w.Length; k++)
-                {
-                    int s = (y * srcWidth + Math.Clamp(xStart[x] + k, 0, srcWidth - 1)) * channels;
-                    for (int c = 0; c < channels; c++) tmp[o + c] += Sample(s + c) * w[k];
-                }
-            }
-
-            // Vertical pass
-            int count = dstWidth * dstHeight * channels;
-            var dst = new byte[count * QoiCodec.BytesPerSample(format)];
-            var dstHalfs = MemoryMarshal.Cast<byte, ushort>(dst.AsSpan());
-            var dstFloats = MemoryMarshal.Cast<byte, float>(dst.AsSpan());
-            for (int y = 0; y < dstHeight; y++)
-            {
-                var w = yWeights[y];
-                for (int x = 0; x < dstWidth; x++)
-                {
-                    int o = (y * dstWidth + x) * channels;
-                    for (int c = 0; c < channels; c++)
-                    {
-                        float sum = 0;
-                        for (int k = 0; k < w.Length; k++)
-                            sum += tmp[(Math.Clamp(yStart[y] + k, 0, srcHeight - 1) * dstWidth + x) * channels + c] * w[k];
-                        switch (format)
-                        {
-                            case QoiSampleFormat.Half: dstHalfs[o + c] = Mathf.FloatToHalf(sum); break;
-                            case QoiSampleFormat.Float: dstFloats[o + c] = sum; break;
-                            default: dst[o + c] = (byte)Math.Clamp((int)(sum + 0.5f), 0, 255); break;
-                        }
-                    }
-                }
-            }
-            return dst;
-        }
-
-        private static (int[] start, float[][] weights) Weights(int srcSize, int dstSize)
-        {
-            float scale = (float)srcSize / dstSize;
-            float support = Math.Max(1f, scale);
-            var start = new int[dstSize];
-            var weights = new float[dstSize][];
-
-            for (int i = 0; i < dstSize; i++)
-            {
-                float center = (i + 0.5f) * scale - 0.5f;
-                int first = (int)Math.Floor(center - support) + 1;
-                int last = (int)Math.Ceiling(center + support) - 1;
-                var w = new float[last - first + 1];
-                float total = 0;
-                for (int k = 0; k < w.Length; k++)
-                    total += w[k] = Math.Max(0f, 1f - Math.Abs(first + k - center) / support);
-                for (int k = 0; k < w.Length; k++) w[k] /= total;
-                start[i] = first;
-                weights[i] = w;
-            }
-            return (start, weights);
         }
 
         [Serializable]

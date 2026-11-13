@@ -456,6 +456,19 @@ namespace LTMX.QOI
                     n++;
                     continue;
                 }
+                if (repeat == 1 && !quad && !single && outputChannels >= 3 && x + 1 < width)
+                {
+                    // Same for the other color outputs (byte planes of half / float files, RGB)
+                    o[0] = (byte)px;
+                    o[g] = (byte)(px >> 8);
+                    o[b] = (byte)(px >> 16);
+                    if (outputChannels == 4) o[a] = fileAlpha ? (byte)(px >> 24) : alpha;
+                    o += stride;
+                    x++;
+                    pixel++;
+                    n++;
+                    continue;
+                }
 
                 if (repeat > count - n) repeat = count - n;
                 n += repeat;
