@@ -161,8 +161,9 @@ namespace LTMX.QOI.Editor
                 PropertyField(compressor, new GUIContent("Compressor",
                     "Unity: Unity's compressor. Fast: the package's multithreaded Burst compressor, for BC1, BC3, BC4 and BC5 " +
                     "of 8-bit images without crunch. Other formats fall back to Unity's compressor."));
-                using (new EditorGUI.DisabledScope(compressor.intValue == (int)QoiCompressor.Fast))
-                    PropertyField(quality, new GUIContent("Compressor Quality", "Quality of Unity's compressor"));
+                PropertyField(quality, new GUIContent("Compressor Quality",
+                    "Quality to speed tradeoff. Unity compressor: its own quality setting. Fast compressor: search effort of ASTC " +
+                    "(Fast: quickest, Normal, Best: about twice as slow as Normal, slightly better)."));
                 using (new EditorGUI.DisabledScope(!crunchable))
                     PropertyField(crunch, new GUIContent("Crunch"));
             }

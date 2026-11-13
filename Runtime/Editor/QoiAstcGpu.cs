@@ -28,6 +28,9 @@ namespace LTMX.QOI.Editor
         /// <summary>Fewer modes, partitions and refinement passes: faster, lower quality.</summary>
         public static bool FastSearch;
 
+        /// <summary>Hints: alpha is transparency (color of alpha 0 texels is free), normal map (z is rebuilt), best quality (more modes tried), fast (fewer).</summary>
+        public const int ProfileTransparency = 1, ProfileNormal = 2, ProfileBest = 4, ProfileFast = 8;
+
         private static readonly int TablesId = Shader.PropertyToID("_Tables");
         private static readonly int PixelsId = Shader.PropertyToID("_Pixels");
         private static readonly int BlocksId = Shader.PropertyToID("_Blocks");
@@ -43,6 +46,7 @@ namespace LTMX.QOI.Editor
         private static readonly int ModeCountId = Shader.PropertyToID("_ModeCount");
         private static readonly int PartOffsetId = Shader.PropertyToID("_PartOffset");
         private static readonly int PartCountId = Shader.PropertyToID("_PartCount");
+        private static readonly int ProfileId = Shader.PropertyToID("_Profile");
 
         /// <summary>True when the GPU encoder can run here (compute shaders, a graphics device, main thread).</summary>
         public static bool Available(int blockSize)
@@ -69,11 +73,13 @@ namespace LTMX.QOI.Editor
         {
             private readonly ComputeShader cs;
             private readonly int kernel, hardKernel, part3Kernel, levels;
+            private readonly bool fast;
             private readonly int[] widths, heights, pixelOffsets, blockOffsets;
             private ComputeBuffer pixelBuffer, blockBuffer, levelBuffer, hardBuffer;
 
-            internal Job(IntPtr level0, int[] widths, int[] heights, int blockSize)
+            internal Job(IntPtr level0, int[] widths, int[] heights, int blockSize, int profile)
             {
+                fast = FastSearch || (profile & ProfileFast) != 0;
                 this.widths = widths;
                 this.heights = heights;
                 levels = widths.Length;
@@ -113,7 +119,10 @@ namespace LTMX.QOI.Editor
                         cs.SetBuffer(k, LevelsId, levelBuffer);
                         cs.SetBuffer(k, HardId, hardBuffer);
                     }
-                    if (FastSearch) cs.EnableKeyword("QOI_ASTC_FAST"); else cs.DisableKeyword("QOI_ASTC_FAST");
+                    cs.DisableKeyword("QOI_ASTC_FAST");
+                    cs.DisableKeyword("QOI_ASTC_BEST");
+                    if (fast) cs.EnableKeyword("QOI_ASTC_FAST");
+                    else if ((profile & ProfileBest) != 0) cs.EnableKeyword("QOI_ASTC_BEST");
                     cs.SetInt(GridOffsetId, tables.gridOffset);
                     cs.SetInt(GridCountId, tables.gridCount);
                     cs.SetInt(ModeOffsetId, tables.modeOffset);
@@ -121,6 +130,7 @@ namespace LTMX.QOI.Editor
                     cs.SetInt(PartOffsetId, tables.partOffset);
                     cs.SetInt(PartCountId, tables.partCount);
                     cs.SetInt(LevelCountId, levels);
+                    cs.SetInt(ProfileId, profile);
                     Upload(0, level0);
                     Dispatch(kernel, 0, blockOffsets[1]);
                     GL.Flush(); // start now, not at the readback
@@ -168,7 +178,7 @@ namespace LTMX.QOI.Editor
                     hardBuffer.GetData(hard, 0, 0, 1);
                     Dispatch(hardKernel, 0, (int)hard[0]);
                     // Pass 3: three partitions on those blocks
-                    if (!FastSearch) Dispatch(part3Kernel, 0, (int)hard[0]);
+                    if (!fast) Dispatch(part3Kernel, 0, (int)hard[0]);
 
                     var result = new byte[(long)blockOffsets[levels] * 16];
                     blockBuffer.GetData(result);
@@ -195,11 +205,11 @@ namespace LTMX.QOI.Editor
         }
 
         /// <summary>Uploads and dispatches level 0 (RGBA32 <paramref name="level0"/>); the others follow with <see cref="Job.Finish"/>.</summary>
-        public static Job Begin(IntPtr level0, int[] widths, int[] heights, int blockSize) => new Job(level0, widths, heights, blockSize);
+        public static Job Begin(IntPtr level0, int[] widths, int[] heights, int blockSize, int profile = 0) => new Job(level0, widths, heights, blockSize, profile);
 
         /// <summary>Encodes every level: RGBA32 <paramref name="pixels"/> of each level into <paramref name="blocks"/> (16 bytes per block, row major).</summary>
-        public static void Encode(IntPtr[] pixels, int[] widths, int[] heights, int blockSize, IntPtr[] blocks) =>
-            Begin(pixels[0], widths, heights, blockSize).Finish(pixels, blocks);
+        public static void Encode(IntPtr[] pixels, int[] widths, int[] heights, int blockSize, IntPtr[] blocks, int profile = 0) =>
+            Begin(pixels[0], widths, heights, blockSize, profile).Finish(pixels, blocks);
 
         /// <summary>Frees the cached table buffers.</summary>
         public static void ReleaseResources()

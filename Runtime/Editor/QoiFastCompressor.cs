@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Unity.Collections.LowLevel.Unsafe;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using static UnityEngine.TextureFormat;
@@ -41,7 +42,8 @@ namespace LTMX.QOI.Editor
         public static int MipCount(int width, int height) => 1 + (int)Math.Floor(Math.Log(Math.Max(width, height), 2));
 
         public static Texture2D CreateTexture2D(byte[] pixels, int channels, int width, int height, TextureFormat format,
-            bool mipmaps, bool linear, bool normalMap)
+            bool mipmaps, bool linear, bool normalMap, bool alphaIsTransparency = false,
+            TextureCompressionQuality quality = TextureCompressionQuality.Normal)
         {
             int mipCount = mipmaps ? MipCount(width, height) : 1;
             // TextureFormat ctor: accepts formats the editor GPU can't sample (ASTC on desktop), GraphicsFormat one throws
@@ -49,14 +51,15 @@ namespace LTMX.QOI.Editor
             var blocks = new IntPtr[mipCount];
             for (int m = 0; m < mipCount; m++) blocks[m] = TextureMemory(tex.GetPixelData<byte>(m), LevelBytes(width, height, m, Code(format)));
             WithRgba32(pixels, channels, width * height, rgba =>
-                Compress(rgba, width, height, Code(format), mipCount, MipMode(linear, normalMap), blocks));
+                Compress(rgba, width, height, Code(format), mipCount, MipMode(linear, normalMap), Profile(alphaIsTransparency, quality, normalMap), blocks));
             // No Apply: the importer serializes the CPU data and the asset reloads from it. Uploading would make Unity
             // decode ASTC on the CPU on desktop, for a GPU copy nobody uses.
             return tex;
         }
 
         /// <summary><paramref name="faces"/>: the 6 faces in <see cref="CubemapFace"/> order.</summary>
-        public static Cubemap CreateCubemap(byte[][] faces, int channels, int size, TextureFormat format, bool mipmaps, bool linear)
+        public static Cubemap CreateCubemap(byte[][] faces, int channels, int size, TextureFormat format, bool mipmaps, bool linear,
+            TextureCompressionQuality quality = TextureCompressionQuality.Normal)
         {
             int mipCount = mipmaps ? MipCount(size, size) : 1;
             // GraphicsFormat ctor throws on formats the editor GPU can't sample (ASTC on desktop): TextureFormat one then
@@ -70,7 +73,7 @@ namespace LTMX.QOI.Editor
                 for (int m = 0; m < mipCount; m++)
                     blocks[m] = TextureMemory(cube.GetPixelData<byte>(m, (CubemapFace)f), LevelBytes(size, size, m, Code(format)));
                 WithRgba32(faces[f], channels, size * size, rgba =>
-                    Compress(rgba, size, size, Code(format), mipCount, MipMode(linear, false), blocks));
+                    Compress(rgba, size, size, Code(format), mipCount, MipMode(linear, false), Profile(false, quality, false), blocks));
             }
             return cube; // No Apply, as for Texture2D
         }
@@ -95,7 +98,8 @@ namespace LTMX.QOI.Editor
         }
 
         /// <summary>Block compressed data of every mip, from RGBA32 pixels.</summary>
-        public static byte[][] Compress(byte[] rgba, int width, int height, TextureFormat format, bool mipmaps, int mipMode)
+        public static byte[][] Compress(byte[] rgba, int width, int height, TextureFormat format, bool mipmaps, int mipMode, bool alphaIsTransparency = false,
+            TextureCompressionQuality quality = TextureCompressionQuality.Normal)
         {
             int code = Code(format);
             int mipCount = mipmaps ? MipCount(width, height) : 1;
@@ -111,7 +115,7 @@ namespace LTMX.QOI.Editor
                     blocks[m] = handles[m].AddrOfPinnedObject();
                 }
                 handles[mipCount] = GCHandle.Alloc(rgba, GCHandleType.Pinned);
-                Compress(handles[mipCount].AddrOfPinnedObject(), width, height, code, mipCount, mipMode, blocks);
+                Compress(handles[mipCount].AddrOfPinnedObject(), width, height, code, mipCount, mipMode, Profile(alphaIsTransparency, quality, mipMode == QoiBlockEncoder.MipNormal), blocks);
             }
             finally
             {
@@ -148,6 +152,11 @@ namespace LTMX.QOI.Editor
         // BC4 and BC5 have no sRGB variant
         private static GraphicsFormat GetGraphicsFormat(TextureFormat format, bool linear) =>
             GraphicsFormatUtility.GetGraphicsFormat(format, !linear && format is not (BC4 or BC5));
+
+        // Content and effort hints of the ASTC GPU encoder
+        private static int Profile(bool alphaIsTransparency, TextureCompressionQuality quality, bool normalMap) =>
+            (alphaIsTransparency ? QoiAstcGpu.ProfileTransparency : 0) | (normalMap ? QoiAstcGpu.ProfileNormal : 0) |
+            (quality == TextureCompressionQuality.Best ? QoiAstcGpu.ProfileBest : quality == TextureCompressionQuality.Fast ? QoiAstcGpu.ProfileFast : 0);
 
         private static int MipMode(bool linear, bool normalMap) =>
             normalMap ? QoiBlockEncoder.MipNormal : linear ? QoiBlockEncoder.MipLinear : QoiBlockEncoder.MipSrgb;
@@ -202,7 +211,7 @@ namespace LTMX.QOI.Editor
         /// Builds the mip chain of RGBA32 pixels and writes every level's blocks to <paramref name="blocks"/>
         /// (<see cref="LevelBytes"/> each).
         /// </summary>
-        private static void Compress(IntPtr rgba, int width, int height, int code, int mipCount, int mipMode, IntPtr[] blocks)
+        private static void Compress(IntPtr rgba, int width, int height, int code, int mipCount, int mipMode, int profile, IntPtr[] blocks)
         {
             if (mipMode == QoiBlockEncoder.MipSrgb) BuildTables();
             int blockSize = BlockSize(code);
@@ -222,7 +231,7 @@ namespace LTMX.QOI.Editor
             }
 
             // GPU: level 0 encodes while the CPU builds the others
-            var job = gpu ? QoiAstcGpu.Begin(rgba, widths, heights, blockSize) : null;
+            var job = gpu ? QoiAstcGpu.Begin(rgba, widths, heights, blockSize, profile) : null;
 
             // Pixels of every level: the source, then the downsampled levels in one unmanaged buffer
             var pixels = new IntPtr[mipCount];

@@ -139,7 +139,7 @@ namespace LTMX.QOI.Editor
             if (fast)
             {
                 tex = QoiFastCompressor.CreateTexture2D(pixels, channels, width, height, compressedFormat, mipMapEnabled, linear,
-                    textureType == TextureImporterType.NormalMap);
+                    textureType == TextureImporterType.NormalMap, alphaIsTransparency || textureType == TextureImporterType.Sprite, _settings.compressionQuality);
             }
             else
             {
@@ -316,7 +316,7 @@ namespace LTMX.QOI.Editor
                 for (int f = 0; f < 6; f++) faces[f] = QoiResize.Resize(BuildFace(img, layout, f, faceSize), faceSize, faceSize, faceSize, faceSize,
                     img.PixelChannels == 3 ? 4 : img.PixelChannels, img.SampleFormat, QoiSampleFormat.Byte);
                 var fast = QoiFastCompressor.CreateCubemap(faces, img.PixelChannels == 3 ? 4 : img.PixelChannels, faceSize,
-                    compressedFormat, mipMapEnabled, IsLinear(img));
+                    compressedFormat, mipMapEnabled, IsLinear(img), _settings.compressionQuality);
                 fast.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
                 fast.wrapMode = TextureWrapMode.Clamp;
                 fast.filterMode = filterMode;

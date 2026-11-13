@@ -25,6 +25,7 @@
 #define PART3_STRIDE 11 // Seed, masks of partitions 1 and 2 (after the two partition patterns and their count)
 #define MAXP 3
 
+#define NORMAL_Z_WEIGHT 0.5 // error weight of z in normal maps (square root), x and y 1
 #if QOI_ASTC_FAST // speed over quality (QoiAstcGpu.FastSearch)
 #define CANDIDATES 2
 #define OTHER_CANDIDATES 2
@@ -37,12 +38,17 @@
 #define PASSES 1
 #define DECIMATE_ITERATIONS 1
 #else
+#if QOI_ASTC_BEST // Compression quality Best: nearly every mode fitted
+#define CANDIDATES 24
+#else
 #define CANDIDATES 4       // modes fitted by the one partition one plane search
+#endif
 #define OTHER_CANDIDATES 3 // by the others
 #define PART_CANDIDATES 2  // two partition patterns fitted
 #define PART_SCREEN 16     // patterns ranked by their line errors to pick those
 #define PART3_CANDIDATES 1 // three partition patterns fitted
 #define PART3_SCREEN 8     // and ranked by line errors
+#define PART_FULL 0
 #define DUAL_TRIES 2       // color channels tried on plane 2 (opaque blocks)
 #define EARLY_OUT 3        // squared error per texel under which nothing else is tried
 #define PASSES 2
