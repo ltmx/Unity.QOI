@@ -23,7 +23,7 @@ Fast [QOI](https://qoiformat.org) import / export for Unity, on the CPU or the G
 - **Seekable QOI**: still readable by any QOI decoder, decodes on all cores or on the GPU
 - **HDR (half / float) and single channel** extensions, lossless
 - Importer: sRGB / linear, mipmaps, max size, NPOT scaling, sprites, **cubemaps**, per platform formats: BC1–BC7, ETC2 / EAC,
-  ASTC and ASTC HDR, Crunch, and a multithreaded Burst compressor for BC1 / BC3 / BC4 / BC5 / BC7
+  ASTC and ASTC HDR, Crunch, and a multithreaded Burst compressor for BC1 / BC3 / BC4 / BC5 / BC7 and ASTC (GPU)
 - Exporter: any `Texture2D` (non readable and compressed included) to QOI / PNG / JPG
 
 ## Installation
@@ -85,8 +85,13 @@ texture2D.SaveToFile(TextureEncodingFormat.QOI);       // native save panel
 - **Compressor**: *Fast* swaps Unity's compressor for the package's Burst one (BC1, BC3, BC4, BC5, BC7 of 8-bit images,
   with its own sRGB correct mipmaps). On 2048² textures: BC5 imports 1.9× faster at Unity's quality, BC4 1.2–1.7×
   faster, BC1 / BC3 match Unity's speed and quality. BC7 (modes 0, 1, 3, 4, 5, 6, 8 blocks at once with AVX2): +0.6 to
-  +1.1 dB on every texture tested, 1.7× faster on color, 2.1× with alpha, 3.7× on normal maps. Other formats fall back
-  to Unity's compressor.
+  +1.1 dB on every texture tested, 1.7× faster on color, 2.1× with alpha, 3.7× on normal maps.
+  ASTC 4x4 to 12x12 is encoded by a compute shader (Burst on the CPU without a GPU). At 12x12 on a 2048² color texture:
+  0.12 s, as good as Unity's *Normal* quality in about 1/6 of its time, and 23× faster than Unity's *Best* (2.8 s),
+  which is 0.45 dB better. Other formats fall back to Unity's compressor.
+- **Compressor Quality** trades speed for quality with the Fast compressor: *Fast* is about 3× quicker than *Normal* (−0.15 dB),
+  *Best* about 1.8× slower (+0.09 dB), measured on ASTC 12x12. The importer settings tune the ASTC encoder: with
+  *Alpha Is Transparency* the color of fully transparent texels is ignored, on normal maps x and y count more than z.
 - **Export**: right click a texture > `Export to...`, or `Window > QOI Export Window` (CPU / GPU encoder, sample format, channels).
 - **Self-test**: `Tools > QOI > Run Self-Test` checks CPU and GPU byte for byte and benchmarks your machine.
 

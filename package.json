@@ -7,7 +7,7 @@
   "name": "com.ltmx.unity.qoi",
   "displayName": "Unity.QOI",
   "description": "Import and Export to the QOI Image Format, with HDR (half / float) and single channel extensions. Burst compiled, with multithreaded and compute shader (GPU) encoding / decoding.",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "dependencies": {
     "com.unity.burst": "1.8.12",
     "com.unity.mathematics": "1.2.6",
