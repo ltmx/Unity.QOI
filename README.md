@@ -82,7 +82,7 @@ texture2D.SaveToFile(TextureEncodingFormat.QOI);       // native save panel
 - **Platforms**: size and compression have per platform overrides (Standalone, Android…), like Unity's texture importer.
   *Automatic* picks BC on desktop and ASTC on mobile (4x4 for high quality and normal maps, 6x6, 8x8 for low quality).
   ASTC HDR is never picked automatically: choose it explicitly when the target GPUs support it.
-- **Compressor**: *Fast* swaps Unity's compressor for the package's Burst one (BC1, BC3, BC4, BC5, BC7 of 8-bit images,
+- **Compressor**: *Fast* swaps Unity's compressor for [Unity.BlockCompress](https://github.com/LTMX/Unity.BlockCompress) (BC1, BC3, BC4, BC5, BC7 of 8-bit images,
   with its own sRGB correct mipmaps). On 2048² textures: BC5 imports 1.9× faster at Unity's quality, BC4 1.2–1.7×
   faster, BC1 / BC3 match Unity's speed and quality. BC7 (modes 0, 1, 3, 4, 5, 6, 8 blocks at once with AVX2): +0.6 to
   +1.1 dB on every texture tested, 1.7× faster on color, 2.1× with alpha, 3.7× on normal maps.

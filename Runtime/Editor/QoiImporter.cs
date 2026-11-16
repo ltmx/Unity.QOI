@@ -7,6 +7,7 @@ using UnityEditor.AssetImporters;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using static UnityEngine.TextureFormat;
+using LTMX.BlockCompress;
 
 namespace LTMX.QOI.Editor
 {
@@ -147,7 +148,7 @@ namespace LTMX.QOI.Editor
 			{
 				bool normalMap = textureType == TextureImporterType.NormalMap;
 				bool hasAlphaFlag = alphaIsTransparency || textureType == TextureImporterType.Sprite;
-				tex = QoiFastCompressor.CreateTexture2D(pixels, channels, width, height, compressedFormat, mipMapEnabled, linear,
+				tex = BlockCompressor.CreateTexture2D(pixels, channels, width, height, compressedFormat, mipMapEnabled, linear,
 					normalMap, hasAlphaFlag, _settings.compressionQuality);
 			}
 			else
@@ -192,7 +193,7 @@ namespace LTMX.QOI.Editor
 		// The fast compressor handles 8-bit images in the formats it supports, crunch excepted
 		// (8-bit formats only, so HDR images are converted to bytes first)
 		private bool UseFastCompressor(QoiImage img, TextureFormat compressedFormat) =>
-			_settings.compressor == QoiCompressor.Fast && QoiFastCompressor.Supports(compressedFormat);
+			_settings.compressor == QoiCompressor.Fast && BlockCompressor.Supports(compressedFormat);
 
 		private static bool IsMobile(BuildTargetGroup group) => group is BuildTargetGroup.Android or BuildTargetGroup.iOS;
 
@@ -345,7 +346,7 @@ namespace LTMX.QOI.Editor
 				}
 
 				bool linearFaces = IsLinear(img);
-				Cubemap fast = QoiFastCompressor.CreateCubemap(faces, faceChannels, faceSize,
+				Cubemap fast = BlockCompressor.CreateCubemap(faces, faceChannels, faceSize,
 					compressedFormat, mipMapEnabled, linearFaces, _settings.compressionQuality);
 				fast.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
 				fast.wrapMode = TextureWrapMode.Clamp;
@@ -524,7 +525,7 @@ namespace LTMX.QOI.Editor
 		/// Unity's compressor, <see cref="EditorUtility.CompressTexture(Texture2D, TextureFormat, TextureCompressionQuality)"/>.
 		Unity = 0,
 		/// The package's Burst compressor, multithreaded, with its own mipmaps. Formats it doesn't support yet fall back to
-		/// Unity's (see <see cref="QoiFastCompressor.Supports"/>).
+		/// Unity's (see <see cref="BlockCompressor.Supports"/>).
 		Fast = 1
 	}
 
