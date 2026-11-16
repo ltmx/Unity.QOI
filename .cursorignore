@@ -1,0 +1,7 @@
+/.branding
+/.documentation
+/.github
+*.gitignore
+*LICENSE
+*.meta
+*.asmdef
