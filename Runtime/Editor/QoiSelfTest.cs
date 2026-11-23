@@ -13,10 +13,10 @@ namespace LTMX.QOI.Editor
 	/// Checks the CPU codec, the texture helpers and the compute shader codec against each other, then benchmarks them.
 	public static class QoiSelfTest
 	{
-		[MenuItem("Tools/QOI/Run Self-Test")]
+		[MenuItem("Tools/QOI/Run Self-Test", false, 20)]
 		public static void Run()
 		{
-			StringBuilder log = new("QOI self-test\n");
+			StringBuilder log = new();
 			int failures = 0;
 
 			void Check(bool ok, string what)
@@ -172,9 +172,14 @@ namespace LTMX.QOI.Editor
 			}
 
 			Benchmark(log);
-			log.Insert(0, failures == 0 ? "[OK] " : $"[{failures} FAILURES] ");
-			if (failures == 0) Debug.Log(log);
-			else Debug.LogError(log);
+			log.Insert(0, failures == 0 ? "QOI self-test passed.\n" : $"QOI self-test failed: {failures}\n");
+			if (failures != 0)
+			{
+				Debug.LogError(log);
+				return;
+			}
+			foreach (string line in log.ToString().Split('\n'))
+				if (line.Length > 0) Debug.Log(line);
 		}
 
 		private static void Benchmark(StringBuilder log)
