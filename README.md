@@ -59,9 +59,9 @@ using var request = QoiGpu.RequestEncode(texture);     // poll it yourself: edit
 request.WaitForCompletion();                           // or request.Update() until request.Done
 request.WriteTo(fileStream);                           // no managed array
 
-// GPU decode (non seekable files fall back to the CPU)
-QoiGpu.TryDecodeInto(seekable, existingUNormRT);       // reused render texture: fastest
-Texture2D tex2D = QoiGpu.DecodeToTexture2D(seekable);  // slower: Unity allocates a CPU copy
+// GPU decode (hybrid via TextureCodecKit: PreferGpu @ 2048² ∧ seekable; else CPU+blit)
+QoiGpu.TryDecodeInto(seekable, existingUNormRT);       // reused RT when PreferGpu
+Texture2D tex2D = QoiGpu.DecodeToTexture2D(seekable);  // always CPU LoadQOI
 QoiGpu.ReleaseResources();                             // frees the pooled GPU buffers
 
 // Raw codec (no UnityEngine)

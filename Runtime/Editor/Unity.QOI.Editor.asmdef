@@ -1,21 +1,23 @@
 {
-  "name": "Unity.QOI.Editor",
-  "rootNamespace": "LTMX.QOI.Editor",
-  "references": [
-    "GUID:fd045858c9fa4cd4dbcb0cba25dbf9b5",
-    "Unity.Burst",
-    "Unity.Mathematics",
-    "Unity.BlockCompress"
-  ],
-  "includePlatforms": [
-    "Editor"
-  ],
-  "excludePlatforms": [],
-  "allowUnsafeCode": true,
-  "overrideReferences": false,
-  "precompiledReferences": [],
-  "autoReferenced": true,
-  "defineConstraints": [],
-  "versionDefines": [],
-  "noEngineReferences": false
+	"name": "Unity.QOI.Editor",
+	"rootNamespace": "LTMX.QOI.Editor",
+	"references": [
+		"Unity.QOI",
+		"Unity.Burst",
+		"Unity.Mathematics",
+		"Unity.Collections",
+		"Unity.BlockCompress",
+		"Unity.TextureCodecKit"
+	],
+	"includePlatforms": [
+		"Editor"
+	],
+	"excludePlatforms": [],
+	"allowUnsafeCode": true,
+	"overrideReferences": false,
+	"precompiledReferences": [],
+	"autoReferenced": true,
+	"defineConstraints": [],
+	"versionDefines": [],
+	"noEngineReferences": false
 }

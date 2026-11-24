@@ -1,16 +1,19 @@
 {
-    "name": "Unity.QOI",
-    "rootNamespace": "LTMX.QOI",
-    "references": [
-        "Unity.Burst"
-    ],
-    "includePlatforms": [],
-    "excludePlatforms": [],
-    "allowUnsafeCode": true,
-    "overrideReferences": false,
-    "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
-    "noEngineReferences": false
+	"name": "Unity.QOI",
+	"rootNamespace": "LTMX.QOI",
+	"references": [
+		"Unity.Burst",
+		"Unity.Mathematics",
+		"Unity.Collections",
+		"Unity.TextureCodecKit"
+	],
+	"includePlatforms": [],
+	"excludePlatforms": [],
+	"allowUnsafeCode": true,
+	"overrideReferences": false,
+	"precompiledReferences": [],
+	"autoReferenced": true,
+	"defineConstraints": [],
+	"versionDefines": [],
+	"noEngineReferences": false
 }

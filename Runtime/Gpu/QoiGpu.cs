@@ -6,23 +6,22 @@ using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using LTMX.TextureCodecKit;
 
 namespace LTMX.QOI
 {
 	/// Compute shader QOI encoder / decoder.
-	/// Encoding works on any 2D texture or render texture already on the GPU (compressed, non readable, HDR...):
-	/// only the compressed bytes are read back. The output is a seekable QOI file (see <see cref="QoiCodec"/>),
-	/// readable by any QOI decoder for 8 bit RGB / RGBA files. HDR (half / float) and single channel files use
-	/// the extensions described in <see cref="QoiCodec"/>.
-	/// Decoding a seekable file runs one GPU thread per chunk and writes straight into a render texture, the pixels
-	/// never exist on the CPU. Plain QOI files (and machines without compute shaders) fall back to the CPU decoder.
-	/// GPU buffers are pooled between calls, call <see cref="ReleaseResources"/> to free them.
+	/// Hybrid RT decode: seekable + size ≥ <see cref="GpuRenderTextureMinPixels"/> → GPU; else CPU+blit.
+	/// <see cref="DecodeToTexture2D"/> always CPU. Encoding unchanged (GPU when supported).
 #if UNITY_6000_5_OR_NEWER
 	// Statics stay valid across play mode: cached shader / kernels, and pooled buffers freed by ReleaseResources.
 	[Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
 #endif
 	public static class QoiGpu
 	{
+		/// Alias of <see cref="HybridGpu.DefaultMinPixels"/> (2048²).
+		public const int GpuRenderTextureMinPixels = HybridGpu.DefaultMinPixels;
+
 		/// Chunk size used by <see cref="Encode"/>: smaller chunks mean more GPU threads when decoding,
 		/// for about 9 extra bytes per chunk.
 		public const int DefaultChunkPixels = 1024;
@@ -77,6 +76,10 @@ namespace LTMX.QOI
 		}
 
 		public static bool IsSupported => SystemInfo.supportsComputeShaders && LoadedShader != null;
+
+		/// True when a render-texture decode should use the GPU for this size (still needs a seek table).
+		public static bool PreferGpu(int width, int height) =>
+			HybridGpu.Prefer(width, height, IsSupported, GpuRenderTextureMinPixels);
 
 		// Buffer pool --------------------------------------------------------------------------------
 
@@ -436,13 +439,12 @@ namespace LTMX.QOI
 
 		// Decoding --------------------------------------------------------------------------------
 
-		/// Decodes a QOI file into a GPU only render texture. This is the fast path: seekable files never touch the CPU.
-		/// Plain files are decoded on the CPU. The format is <see cref="QoiTexture.GetGraphicsFormat"/>: R8G8B8A8 (sRGB unless the
-		/// file or <paramref name="linear"/> says otherwise), R8 for single channel files, R16 / R16G16B16A16 SFloat for half files,
-		/// R32 / R32G32B32A32 SFloat for float files.
-		public static RenderTexture Decode(byte[] data, bool mipChain = false, bool? linear = null)
+		/// Decodes a QOI file into a render texture. Hybrid: seekable + PreferGpu → compute; else CPU+blit.
+		/// Format from <see cref="QoiTexture.GetGraphicsFormat"/>.
+		public static RenderTexture Decode(byte[] data, bool mipChain = false, bool? linear = null, bool forceGpu = false)
 		{
 			QoiHeader header = QoiCodec.ReadHeader(data);
+			bool useGpu = HybridGpu.UseGpu(header.Width, header.Height, IsSupported, forceGpu, GpuRenderTextureMinPixels);
 			// Gamma color space projects sample everything as is
 			bool srgb = !(linear ?? header.ColorSpace == QoiColorSpace.Linear) && QualitySettings.activeColorSpace == ColorSpace.Linear;
 			GraphicsFormat format = QoiTexture.GetGraphicsFormat(header, srgb);
@@ -454,7 +456,7 @@ namespace LTMX.QOI
 			};
 
 			RenderTexture result;
-			if (IsSupported && QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets) && FitsGroupLimit(offsets))
+			if (useGpu && QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets) && FitsGroupLimit(offsets))
 			{
 				if (srgb)
 				{
@@ -490,13 +492,8 @@ namespace LTMX.QOI
 			return result;
 		}
 
-		/// Decodes a seekable QOI file into an existing render texture, without allocating anything: the fastest way to
-		/// stream images. <paramref name="target"/> must be a random write texture of the image size, in the format given by
-		/// <c>QoiTexture.GetGraphicsFormat(header, srgb: false)</c>: R8G8B8A8_UNorm for 8 bit RGB / RGBA files (it receives the
-		/// raw bytes, sRGB values are not converted), R8_UNorm for single channel files, R16 / R16G16B16A16 / R32 / R32G32B32A32
-		/// SFloat for HDR files.
-		/// Returns false, leaving <paramref name="target"/> untouched, for plain QOI files or without compute shaders.
-		public static bool TryDecodeInto(byte[] data, RenderTexture target)
+		/// Seekable + PreferGpu (or forceGpu) into an existing random-write RT. Returns false if CPU path would be used.
+		public static bool TryDecodeInto(byte[] data, RenderTexture target, bool forceGpu = false)
 		{
 			QoiHeader header = QoiCodec.ReadHeader(data);
 			if (target == null) throw new ArgumentNullException(nameof(target));
@@ -504,28 +501,19 @@ namespace LTMX.QOI
 			if (target.width != header.Width || target.height != header.Height || !target.enableRandomWrite || target.graphicsFormat != expected)
 				throw new ArgumentException($"The target must be an {expected} random write texture of the image size.", nameof(target));
 
-			if (!IsSupported || !QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets) || !FitsGroupLimit(offsets))
-			{
+			if (!HybridGpu.UseGpu(header.Width, header.Height, IsSupported, forceGpu, GpuRenderTextureMinPixels)
+				|| !QoiCodec.TryReadSeekTable(data, header, out int chunkPixels, out int[] offsets)
+				|| !FitsGroupLimit(offsets))
 				return false;
-			}
 
 			if (!target.IsCreated()) target.Create();
 			Dispatch(data, header, chunkPixels, offsets, target);
 			return true;
 		}
 
-		/// Same as <see cref="Decode"/> but returns a <see cref="Texture2D"/>. Slower: Unity allocates a CPU copy for
-		/// every Texture2D, prefer <see cref="Decode"/> when any <see cref="Texture"/> will do.
-		public static Texture2D DecodeToTexture2D(byte[] data, bool mipChain = false, bool? linear = null)
-		{
-			RenderTexture rt = Decode(data, mipChain, linear);
-			TextureCreationFlags flags = (mipChain ? TextureCreationFlags.MipChain : TextureCreationFlags.None) | TextureCreationFlags.DontInitializePixels;
-			Texture2D texture = new(rt.width, rt.height, rt.graphicsFormat, flags);
-			Graphics.CopyTexture(rt, texture);
-			rt.Release();
-			DestroySafe(rt);
-			return texture;
-		}
+		/// Always CPU — fastest path into a Texture2D (no GPU CopyTexture / readback).
+		public static Texture2D DecodeToTexture2D(byte[] data, bool mipChain = false, bool? linear = null) =>
+			QoiTexture.LoadQOI(data, mipChain, linear, false);
 
 		/// True when the chunks of a seek table fit in one dispatch
 		private static bool FitsGroupLimit(int[] offsets) => (offsets.Length - 1 + ChunkThreads - 1) / ChunkThreads <= MaxGroups;

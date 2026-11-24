@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using LTMX.TextureCodecKit;
 using Debug = UnityEngine.Debug;
 
 namespace LTMX.QOI.Editor
@@ -64,16 +65,16 @@ namespace LTMX.QOI.Editor
 					byte[] gpuSeekable = QoiGpu.Encode(tex, chunk, QoiChannels.Rgba);
 					Check(gpuSeekable.AsSpan().SequenceEqual(cpuSeekable), $"{name}: GPU encode == CPU seekable encode ({gpuSeekable.Length} bytes)");
 
-					// GPU decode, raw render texture
-					RenderTexture rt = QoiGpu.Decode(cpuSeekable);
+					// GPU decode, raw render texture (forceGpu: small images PreferGpu=False)
+					RenderTexture rt = QoiGpu.Decode(cpuSeekable, forceGpu: true);
 					Check(GraphicsFormatUtility.IsSRGBFormat(rt.graphicsFormat) == expectSRGB && ReadBack(rt, !expectSRGB).AsSpan().SequenceEqual(pixels), $"{name}: GPU decode to render texture");
 					UnityEngine.Object.DestroyImmediate(rt);
 
 					// Back to back decodes share pooled upload buffers: both results must stay intact
 					byte[] otherPixels = Pattern(w, h + 1);
 					byte[] other = QoiCodec.Encode(otherPixels, w, h + 1, 4, QoiChannels.Rgba, colorSpace, flipY: true, seekChunkPixels: chunk);
-					RenderTexture first = QoiGpu.Decode(cpuSeekable);
-					RenderTexture second = QoiGpu.Decode(other);
+					RenderTexture first = QoiGpu.Decode(cpuSeekable, forceGpu: true);
+					RenderTexture second = QoiGpu.Decode(other, forceGpu: true);
 					Check(ReadBack(first, !expectSRGB).AsSpan().SequenceEqual(pixels) && ReadBack(second, !expectSRGB).AsSpan().SequenceEqual(otherPixels), $"{name}: back to back GPU decodes");
 					UnityEngine.Object.DestroyImmediate(first);
 					UnityEngine.Object.DestroyImmediate(second);
@@ -141,13 +142,13 @@ namespace LTMX.QOI.Editor
 						byte[] gpuSeekable = QoiGpu.Encode(tex, chunk);
 						Check(gpuSeekable.AsSpan().SequenceEqual(cpuSeekable), $"{name}: GPU encode == CPU seekable encode ({gpuSeekable.Length} bytes)");
 
-						RenderTexture rt = QoiGpu.Decode(cpuSeekable);
+						RenderTexture rt = QoiGpu.Decode(cpuSeekable, forceGpu: true);
 						Check(rt.graphicsFormat == format && ReadBackRaw(rt).AsSpan().SequenceEqual(raw), $"{name}: GPU decode to render texture");
 						UnityEngine.Object.DestroyImmediate(rt);
 
 						RenderTexture target = new(new RenderTextureDescriptor(w, h, format, 0) { enableRandomWrite = true });
 						target.Create();
-						Check(QoiGpu.TryDecodeInto(cpuSeekable, target) && ReadBackRaw(target).AsSpan().SequenceEqual(raw), $"{name}: GPU decode into existing render texture");
+						Check(QoiGpu.TryDecodeInto(cpuSeekable, target, forceGpu: true) && ReadBackRaw(target).AsSpan().SequenceEqual(raw), $"{name}: GPU decode into existing render texture");
 						target.Release();
 						UnityEngine.Object.DestroyImmediate(target);
 
@@ -203,13 +204,17 @@ namespace LTMX.QOI.Editor
 
 				log.AppendLine($"  GPU encode            {Median(() => gpuBytes = QoiGpu.Encode(tex)),6:F1} ms  {gpuBytes.Length / 1048576f:F1} MB (incl. readback)");
 				byte[] gpuSeekable = QoiCodec.Encode(pixels, size, size, 4, QoiChannels.Rgba, flipY: true, seekChunkPixels: QoiGpu.DefaultChunkPixels);
-				double decode = Median(() =>
+				double decode = CodecBench.MedianOf(5, () => CodecBench.TimeGpuReadback(() => QoiGpu.Decode(gpuSeekable, forceGpu: true)));
+				log.AppendLine($"  GPU decode            {decode,6:F1} ms  (force GPU, incl. readback)");
+
+				foreach (int n in new[] { 1024, 2048, 4096 })
 				{
-					RenderTexture rt = QoiGpu.Decode(gpuSeekable);
-					ReadBack(rt, false, 1); // wait for the GPU
-					UnityEngine.Object.DestroyImmediate(rt);
-				});
-				log.AppendLine($"  GPU decode            {decode,6:F1} ms  (incl. upload)");
+					byte[] px = n == size ? pixels : Pattern(n, n);
+					byte[] seek = QoiCodec.Encode(px, n, n, 4, QoiChannels.Rgba, flipY: true, seekChunkPixels: QoiGpu.DefaultChunkPixels);
+					bool prefer = QoiGpu.PreferGpu(n, n);
+					double hybrid = CodecBench.MedianOf(5, () => CodecBench.TimeHybridRt(() => QoiGpu.Decode(seek), prefer));
+					log.AppendLine($"  {n}² hybrid RT         {hybrid,6:F1} ms  (PreferGpu={prefer}, fence sync if GPU)");
+				}
 			}
 			finally
 			{
